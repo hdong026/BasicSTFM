@@ -2,18 +2,18 @@
 
 BasicSTFM is a BasicTS-inspired research framework for spatio-temporal foundation models. It is designed for experiments where the model architecture, pretraining objective, fine-tuning protocol, loss function, metric suite, and training schedule must all remain configurable and extensible.
 
-The framework follows the configuration-centric philosophy of [BasicTS](https://github.com/GestaltCogTeam/BasicTS), but specializes it for foundation-model workflows such as masked spatio-temporal reconstruction, forecasting fine-tuning, staged transfer, and custom task design.
+The framework follows the configuration-centric philosophy of [BasicTS](https://github.com/GestaltCogTeam/BasicTS), while specializing the workflow for foundation-model research: masked spatio-temporal pretraining, forecasting fine-tuning, staged transfer, and custom task design.
 
 ## Highlights
 
 - Config-driven experiments with YAML and JSON support.
 - Registry-based component discovery for models, datamodules, tasks, losses, metrics, and trainers.
-- First-class multi-stage training, including pretraining, fine-tuning, and evaluation stages.
+- First-class multi-stage training for pretraining, fine-tuning, and evaluation.
 - Custom training flows through task-level batch logic.
 - Custom model, loss, metric, and task injection through `custom_imports`.
 - Built-in synthetic data for immediate smoke testing without external datasets.
 - Built-in `TinySTFoundationModel` and `MLPForecaster` baselines.
-- Lightweight tests that validate the framework core without requiring PyTorch.
+- Ubuntu-friendly setup with `requirements.txt` and editable installation.
 
 ## Design Overview
 
@@ -37,6 +37,7 @@ This separation is the central design choice. A forecasting fine-tuning stage, a
 ```text
 BasicSTFM/
   README.md
+  requirements.txt
   pyproject.toml
   configs/
     examples/
@@ -50,30 +51,17 @@ BasicSTFM/
     custom_task.py
   src/
     basicstfm/
-      __init__.py
       cli.py
       config.py
       registry.py
       builders.py
       data/
-        datamodule.py
-        scaler.py
-        window_dataset.py
       models/
-        mlp_forecaster.py
-        st_foundation.py
       tasks/
-        forecasting.py
-        masked_reconstruction.py
       losses/
-        common.py
       metrics/
-        common.py
       optim/
-        factory.py
       engines/
-        stage.py
-        trainer.py
       utils/
   tests/
 ```
@@ -91,27 +79,67 @@ Important files:
 - `examples/custom_loss.py`: custom loss example.
 - `examples/custom_task.py`: custom task example.
 
-## Installation
+## Ubuntu Installation From GitHub
 
-### Step 1: Enter the Project Directory
+The following instructions assume Ubuntu 22.04 or Ubuntu 24.04. They also work on most recent Debian-based Linux distributions with minor package-name adjustments.
 
-```bash
-cd /Users/donghuanze/Desktop/codex_workspace/BasicSTFM
-```
-
-Verify the current directory:
+### Step 1: Install System Packages
 
 ```bash
-pwd
+sudo apt update
+sudo apt install -y git python3 python3-venv python3-pip build-essential
 ```
 
-Expected output:
+Verify Python:
+
+```bash
+python3 --version
+```
+
+BasicSTFM requires Python 3.9 or newer.
+
+### Step 2: Clone the Repository
+
+Use HTTPS:
+
+```bash
+git clone https://github.com/<your-org-or-username>/BasicSTFM.git
+cd BasicSTFM
+```
+
+Or use SSH:
+
+```bash
+git clone git@github.com:<your-org-or-username>/BasicSTFM.git
+cd BasicSTFM
+```
+
+If you already cloned the repository and want the latest version:
+
+```bash
+cd BasicSTFM
+git pull --ff-only
+```
+
+Verify the repository content:
+
+```bash
+ls
+```
+
+Expected files include:
 
 ```text
-/Users/donghuanze/Desktop/codex_workspace/BasicSTFM
+README.md
+requirements.txt
+pyproject.toml
+configs
+examples
+src
+tests
 ```
 
-### Step 2: Create a Virtual Environment
+### Step 3: Create a Virtual Environment
 
 ```bash
 python3 -m venv .venv
@@ -123,7 +151,7 @@ Activate it:
 source .venv/bin/activate
 ```
 
-After activation, your shell prompt should usually contain `(.venv)`.
+After activation, your prompt should usually contain `(.venv)`.
 
 Verify the Python interpreter:
 
@@ -134,42 +162,63 @@ which python
 Expected output:
 
 ```text
-/Users/donghuanze/Desktop/codex_workspace/BasicSTFM/.venv/bin/python
+.../BasicSTFM/.venv/bin/python
 ```
 
-### Step 3: Upgrade Packaging Tools
+### Step 4: Upgrade Packaging Tools
 
 ```bash
 python -m pip install --upgrade pip setuptools wheel
 ```
 
-### Step 4: Install BasicSTFM
+### Step 5: Install Python Dependencies
+
+Install dependencies from `requirements.txt`:
+
+```bash
+pip install -r requirements.txt
+```
+
+Then install BasicSTFM in editable mode:
+
+```bash
+pip install -e .
+```
+
+Editable mode is recommended for research development because changes under `src/basicstfm/` take effect without reinstalling the package.
+
+Alternative one-line developer installation:
 
 ```bash
 pip install -e ".[dev]"
 ```
 
-This installs BasicSTFM in editable mode and includes development dependencies.
+### Step 6: PyTorch Notes
 
-Core dependencies:
+The default `requirements.txt` includes `torch>=2.1`, which is suitable for a basic CPU setup and many standard Linux environments.
 
-- `numpy`
-- `PyYAML`
-- `torch`
-- `tqdm`
-
-Development dependencies:
-
-- `pytest`
-- `ruff`
-
-If your system requires a specific CUDA-enabled PyTorch build, install the appropriate PyTorch wheel first, then run:
+If you need a CUDA-specific PyTorch build, install the PyTorch wheel that matches your CUDA driver before installing BasicSTFM dependencies. A common workflow is:
 
 ```bash
-pip install -e ".[dev]"
+pip install --upgrade pip setuptools wheel
+# Install your CUDA-compatible PyTorch build here.
+pip install -r requirements.txt
+pip install -e .
 ```
 
-### Step 5: Verify the Command Line Interface
+Check whether PyTorch can see CUDA:
+
+```bash
+python - <<'PY'
+import torch
+print("torch:", torch.__version__)
+print("cuda_available:", torch.cuda.is_available())
+if torch.cuda.is_available():
+    print("device:", torch.cuda.get_device_name(0))
+PY
+```
+
+### Step 7: Verify the Command Line Interface
 
 ```bash
 basicstfm --help
@@ -209,52 +258,10 @@ Run a syntax compilation check:
 PYTHONPYCACHEPREFIX=/tmp/basicstfm_pycache python -m compileall src tests examples
 ```
 
-The `PYTHONPYCACHEPREFIX` environment variable keeps bytecode caches inside `/tmp`. This avoids macOS cache-directory permission issues in restricted environments.
-
-## Quick Start
-
-### Step 1: Inspect the Forecasting Config
-
-```bash
-sed -n '1,220p' configs/examples/forecasting.yaml
-```
-
-The config is organized into four main blocks:
-
-```yaml
-data:
-  type: SyntheticDataModule
-
-model:
-  type: TinySTFoundationModel
-
-trainer:
-  type: MultiStageTrainer
-
-pipeline:
-  stages:
-    - name: forecasting
-```
-
-The roles are:
-
-- `data`: defines how batches are produced.
-- `model`: defines the neural architecture.
-- `trainer`: defines the experiment runner.
-- `pipeline.stages`: defines the training procedure.
-
-### Step 2: Run a Dry Run
-
-A dry run parses the stage plan without constructing the model or dataloaders.
+Run a dry run to verify the multi-stage parser:
 
 ```bash
 basicstfm dry-run configs/examples/multistage_pretrain_finetune.yaml
-```
-
-Equivalent module command:
-
-```bash
-PYTHONPATH=src python -m basicstfm.cli dry-run configs/examples/multistage_pretrain_finetune.yaml
 ```
 
 Expected output is a JSON-like stage description:
@@ -278,11 +285,11 @@ Expected output is a JSON-like stage description:
 ]
 ```
 
-If this command succeeds, the config and multi-stage parser are working.
+## Quick Start
 
-### Step 3: Run a Single-Stage Forecasting Demo
+### Run a Single-Stage Forecasting Demo
 
-This example uses synthetic data, so no dataset download is required.
+This example uses synthetic data, so no external dataset is required.
 
 ```bash
 basicstfm train configs/examples/forecasting.yaml
@@ -314,7 +321,7 @@ forecasting_best.pt
 forecasting_last.pt
 ```
 
-### Step 4: Run a Multi-Stage Pretrain-Finetune Demo
+### Run a Multi-Stage Pretrain-Finetune Demo
 
 This example executes two stages:
 
@@ -360,7 +367,7 @@ pipeline:
 
 ## Command-Line Overrides
 
-Config values can be overridden without editing the YAML file.
+Config values can be overridden without editing YAML files.
 
 Run on CPU:
 
@@ -390,7 +397,7 @@ basicstfm train configs/examples/forecasting.yaml \
   --cfg-options trainer.device=cpu data.batch_size=8 pipeline.stages.0.epochs=1
 ```
 
-List indices are addressed by integer positions. For example:
+List indices are addressed by integer positions:
 
 ```text
 pipeline.stages.0.epochs=1
@@ -774,16 +781,20 @@ If `work_dir` is omitted, BasicSTFM uses:
 runs/<experiment_name>/<timestamp>/
 ```
 
-## Recommended First Run
+## Recommended Ubuntu Workflow
 
-For a first-time setup, run the following commands in order:
+For a fresh Ubuntu machine, run the following commands in order:
 
 ```bash
-cd /Users/donghuanze/Desktop/codex_workspace/BasicSTFM
+sudo apt update
+sudo apt install -y git python3 python3-venv python3-pip build-essential
+git clone https://github.com/<your-org-or-username>/BasicSTFM.git
+cd BasicSTFM
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip setuptools wheel
-pip install -e ".[dev]"
+pip install -r requirements.txt
+pip install -e .
 basicstfm --help
 PYTHONPATH=src python -m unittest discover -s tests
 basicstfm dry-run configs/examples/multistage_pretrain_finetune.yaml
@@ -793,7 +804,41 @@ basicstfm train configs/examples/multistage_pretrain_finetune.yaml --cfg-options
 
 If all commands succeed, the environment, CLI, config parser, registry system, trainer, and multi-stage execution path are functional.
 
+## Updating an Existing Clone
+
+To update the repository:
+
+```bash
+cd BasicSTFM
+git pull --ff-only
+source .venv/bin/activate
+pip install -r requirements.txt
+pip install -e .
+```
+
+Then rerun the checks:
+
+```bash
+PYTHONPATH=src python -m unittest discover -s tests
+basicstfm dry-run configs/examples/multistage_pretrain_finetune.yaml
+```
+
 ## Troubleshooting
+
+### `python3 -m venv .venv` fails
+
+Install the Ubuntu venv package:
+
+```bash
+sudo apt update
+sudo apt install -y python3-venv
+```
+
+Then recreate the environment:
+
+```bash
+python3 -m venv .venv
+```
 
 ### `basicstfm` command not found
 
@@ -806,7 +851,7 @@ source .venv/bin/activate
 Reinstall the package:
 
 ```bash
-pip install -e ".[dev]"
+pip install -e .
 ```
 
 Or run with the module entry point:
@@ -817,27 +862,25 @@ PYTHONPATH=src python -m basicstfm.cli --help
 
 ### `ModuleNotFoundError: No module named 'yaml'`
 
-Install `PyYAML`:
+Install dependencies:
 
 ```bash
-pip install PyYAML
-```
-
-Or reinstall project dependencies:
-
-```bash
-pip install -e ".[dev]"
+pip install -r requirements.txt
 ```
 
 ### `ModuleNotFoundError: No module named 'torch'`
 
-Install PyTorch:
+Install dependencies:
 
 ```bash
-pip install torch
+pip install -r requirements.txt
 ```
 
-For CUDA-specific installations, use the PyTorch wheel matching your local CUDA environment.
+If you need a CUDA-specific build, install the matching PyTorch wheel for your system, then rerun:
+
+```bash
+pip install -r requirements.txt
+```
 
 ### `RuntimeError: No trainable parameters`
 

@@ -1,0 +1,9 @@
+# Runtime dependencies
+numpy>=1.23
+PyYAML>=6.0
+torch>=2.1
+tqdm>=4.66
+
+# Development and verification
+pytest>=7.4
+ruff>=0.4
