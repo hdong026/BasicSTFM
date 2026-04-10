@@ -154,7 +154,7 @@ data:
   graph_path: data/<DATASET_NAME>/adj.npz
   graph_key: adj
   input_len: 24
-  target_len: 12
+  output_len: 12
   batch_size: 32
   split: [0.7, 0.1, 0.2]
   scaler:
@@ -215,10 +215,20 @@ Then run:
 basicstfm train configs/examples/file_forecasting.yaml \
   --cfg-options \
   data.data_path=data/<DATASET_NAME>/data.npz \
+  data.graph_path=data/<DATASET_NAME>/adj.npz
+```
+
+The default model config uses `auto` for `num_nodes`, `input_dim`, `output_dim`, `input_len`, and `output_len`, so these values are inferred from the prepared data and datamodule settings.
+
+To change the forecasting horizon, override only the data window:
+
+```bash
+basicstfm train configs/examples/file_forecasting.yaml \
+  --cfg-options \
+  data.data_path=data/<DATASET_NAME>/data.npz \
   data.graph_path=data/<DATASET_NAME>/adj.npz \
-  model.num_nodes=<N> \
-  model.input_dim=<C> \
-  model.output_dim=<C>
+  data.input_len=24 \
+  data.output_len=12
 ```
 
 ## Scaling and Rescaling

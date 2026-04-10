@@ -76,8 +76,10 @@ class MultiStageTrainer:
         self.logger.info("Work directory: %s", self.work_dir)
         self.datamodule = DATAMODULES.build(self.cfg["data"])
         self.datamodule.setup()
-        self.model = MODELS.build(self.cfg["model"]).to(self.device)
+        model_cfg = self._resolve_model_config(dict(self.cfg["model"]))
+        self.model = MODELS.build(model_cfg).to(self.device)
         self.logger.info("Model: %s", self.model.__class__.__name__)
+        self.logger.info("Resolved model config: %s", json.dumps(model_cfg, sort_keys=True))
         self.logger.info("Device: %s", self.device)
 
     def run_stage(self, stage: StageSpec, stage_index: int = 0) -> None:
@@ -344,6 +346,23 @@ class MultiStageTrainer:
             return self.last_checkpoint
         return reference
 
+    def _resolve_model_config(self, model_cfg: Dict[str, Any]) -> Dict[str, Any]:
+        if self.datamodule is None or not hasattr(self.datamodule, "get_metadata"):
+            return model_cfg
+
+        metadata = self.datamodule.get_metadata()
+        inferred = {
+            "num_nodes": metadata["num_nodes"],
+            "input_dim": metadata["num_channels"],
+            "output_dim": metadata["num_channels"],
+            "input_len": metadata["input_len"],
+            "output_len": metadata["target_len"],
+        }
+        for key, value in inferred.items():
+            if key not in model_cfg or _is_auto(model_cfg[key]):
+                model_cfg[key] = value
+        return model_cfg
+
     def _prepare_resume(self) -> None:
         checkpoint = self.resume_from
         if not checkpoint and self.auto_resume:
@@ -441,3 +460,7 @@ class MultiStageTrainer:
 
 def _matches_any(name: str, patterns: Iterable[str]) -> bool:
     return any(pattern == "all" or fnmatch.fnmatch(name, pattern) for pattern in patterns)
+
+
+def _is_auto(value: Any) -> bool:
+    return value is None or (isinstance(value, str) and value.lower() == "auto")

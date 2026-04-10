@@ -14,7 +14,7 @@ data:
   graph_path: data/MY_DATASET/adj.npz
   graph_key: adj
   input_len: 12
-  target_len: 12
+  output_len: 12
   batch_size: 64
   num_workers: 2
   split: [0.7, 0.1, 0.2]
@@ -23,11 +23,11 @@ data:
 
 model:
   type: TinySTFoundationModel
-  num_nodes: 207
-  input_dim: 1
-  output_dim: 1
-  input_len: 12
-  output_len: 12
+  num_nodes: auto
+  input_dim: auto
+  output_dim: auto
+  input_len: auto
+  output_len: auto
   hidden_dim: 64
   num_layers: 2
   num_heads: 4

@@ -53,7 +53,8 @@ class WindowDataModule:
         self,
         data_path: str,
         input_len: int,
-        target_len: int,
+        target_len: Optional[int] = None,
+        output_len: Optional[int] = None,
         input_key: str = "data",
         graph_path: Optional[str] = None,
         graph_key: str = "adj",
@@ -66,12 +67,16 @@ class WindowDataModule:
         pin_memory: bool = False,
         drop_last: bool = False,
     ) -> None:
+        if output_len is not None:
+            target_len = output_len
+        if target_len is None:
+            raise ValueError("WindowDataModule requires target_len or output_len")
         self.data_path = data_path
         self.input_key = input_key
         self.graph_path = graph_path
         self.graph_key = graph_key
         self.input_len = input_len
-        self.target_len = target_len
+        self.target_len = int(target_len)
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.split = split
@@ -83,6 +88,7 @@ class WindowDataModule:
         self.scaler = build_scaler(self.scaler_cfg)
         self.graph: Optional[torch.Tensor] = None
         self.datasets: Dict[str, WindowDataset] = {}
+        self.data_shape: Optional[Tuple[int, int, int]] = None
 
     def setup(self) -> None:
         array = _load_numpy(self.data_path, self.input_key)
@@ -90,6 +96,7 @@ class WindowDataModule:
             array = array[..., None]
         if array.ndim != 3:
             raise ValueError(f"Expected [T, N, C] data, got {array.shape}")
+        self.data_shape = tuple(int(x) for x in array.shape)
 
         train_len, val_len, test_len = _split_lengths(len(array), self.split)
         train_raw = array[:train_len]
@@ -137,6 +144,18 @@ class WindowDataModule:
     def get_scaler(self) -> object:
         return self.scaler
 
+    def get_metadata(self) -> Dict[str, Any]:
+        if self.data_shape is None:
+            raise RuntimeError("DataModule metadata is unavailable before setup")
+        _, num_nodes, num_channels = self.data_shape
+        return {
+            "data_shape": self.data_shape,
+            "num_nodes": num_nodes,
+            "num_channels": num_channels,
+            "input_len": self.input_len,
+            "target_len": self.target_len,
+        }
+
 
 @DATAMODULES.register()
 class SyntheticDataModule(WindowDataModule):
@@ -148,7 +167,8 @@ class SyntheticDataModule(WindowDataModule):
         num_nodes: int = 32,
         num_channels: int = 2,
         input_len: int = 24,
-        target_len: int = 12,
+        target_len: Optional[int] = None,
+        output_len: Optional[int] = None,
         batch_size: int = 32,
         num_workers: int = 0,
         split: Sequence[float] = (0.7, 0.1, 0.2),
@@ -160,6 +180,10 @@ class SyntheticDataModule(WindowDataModule):
         seed: int = 42,
         noise_std: float = 0.05,
     ) -> None:
+        if output_len is not None:
+            target_len = output_len
+        if target_len is None:
+            target_len = 12
         self.num_timesteps = num_timesteps
         self.num_nodes = num_nodes
         self.num_channels = num_channels
@@ -189,6 +213,7 @@ class SyntheticDataModule(WindowDataModule):
         trend = 0.001 * t * channel_scale
         noise = rng.normal(0.0, self.noise_std, size=(self.num_timesteps, self.num_nodes, self.num_channels))
         array = (daily + 0.5 * weekly + trend + noise).astype(np.float32)
+        self.data_shape = tuple(int(x) for x in array.shape)
 
         distances = np.abs(np.arange(self.num_nodes)[:, None] - np.arange(self.num_nodes)[None, :])
         graph = np.exp(-distances / max(1.0, self.num_nodes / 8.0)).astype(np.float32)

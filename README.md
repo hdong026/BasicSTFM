@@ -695,10 +695,7 @@ Run a dry run with the generic file-backed config:
 basicstfm dry-run configs/examples/file_forecasting.yaml \
   --cfg-options \
   data.data_path=data/<DATASET_NAME>/data.npz \
-  data.graph_path=data/<DATASET_NAME>/adj.npz \
-  model.num_nodes=<N> \
-  model.input_dim=<C> \
-  model.output_dim=<C>
+  data.graph_path=data/<DATASET_NAME>/adj.npz
 ```
 
 Run a fast CPU smoke test:
@@ -710,9 +707,6 @@ basicstfm train configs/examples/file_forecasting.yaml \
   data.data_path=data/<DATASET_NAME>/data.npz \
   data.graph_path=data/<DATASET_NAME>/adj.npz \
   data.batch_size=8 \
-  model.num_nodes=<N> \
-  model.input_dim=<C> \
-  model.output_dim=<C> \
   pipeline.stages.0.epochs=1
 ```
 
@@ -722,13 +716,23 @@ Run the normal forecasting example:
 basicstfm train configs/examples/file_forecasting.yaml \
   --cfg-options \
   data.data_path=data/<DATASET_NAME>/data.npz \
-  data.graph_path=data/<DATASET_NAME>/adj.npz \
-  model.num_nodes=<N> \
-  model.input_dim=<C> \
-  model.output_dim=<C>
+  data.graph_path=data/<DATASET_NAME>/adj.npz
 ```
 
-Replace `<DATASET_NAME>`, `<HDF5_KEY>`, `<N>`, and `<C>` with the values reported by `inspect_npz.py`.
+Replace `<DATASET_NAME>` and `<HDF5_KEY>` with your dataset name and HDF5 key. The default model config uses `auto` for `num_nodes`, `input_dim`, `output_dim`, `input_len`, and `output_len`, so these values are inferred from the prepared data and datamodule settings.
+
+To use a different history length or prediction horizon, override only the data horizon:
+
+```bash
+basicstfm train configs/examples/file_forecasting.yaml \
+  --cfg-options \
+  data.data_path=data/<DATASET_NAME>/data.npz \
+  data.graph_path=data/<DATASET_NAME>/adj.npz \
+  data.input_len=24 \
+  data.output_len=12
+```
+
+The model automatically receives `input_len=24` and `output_len=12` because the model template uses `auto`.
 
 ## Data Interface
 
@@ -770,7 +774,7 @@ data:
   data_path: data/my_dataset/data.npz
   input_key: data
   input_len: 24
-  target_len: 12
+  output_len: 12
   batch_size: 32
   split: [0.7, 0.1, 0.2]
   scaler:
@@ -793,22 +797,32 @@ data:
   graph_path: data/my_dataset/adj.npz
   graph_key: adj
   input_len: 24
-  target_len: 12
+  output_len: 12
   batch_size: 32
   split: [0.7, 0.1, 0.2]
 ```
 
-The model configuration must match the data shape:
+The default model template can infer dimensions from the data:
 
 ```yaml
 model:
   type: TinySTFoundationModel
-  num_nodes: 207
-  input_dim: 1
-  output_dim: 1
-  input_len: 24
-  output_len: 12
+  num_nodes: auto
+  input_dim: auto
+  output_dim: auto
+  input_len: auto
+  output_len: auto
 ```
+
+Inference rules:
+
+- `num_nodes` comes from the prepared array shape `[T, N, C]`.
+- `input_dim` comes from `C`.
+- `output_dim` defaults to `C`.
+- `input_len` comes from `data.input_len`.
+- `output_len` comes from `data.output_len` or `data.target_len`.
+
+You can still override any of these values explicitly for special models or tasks.
 
 ## Scaling and Rescaling
 
@@ -830,7 +844,7 @@ data:
   data_path: data/<DATASET_NAME>/data.npz
   input_key: data
   input_len: 24
-  target_len: 12
+  output_len: 12
   scaler:
     type: standard
 ```
@@ -1200,10 +1214,7 @@ basicstfm train configs/examples/file_forecasting.yaml \
   --cfg-options \
   trainer.resume_from=runs/file_forecasting/checkpoints/latest.pt \
   data.data_path=data/METR-LA/data.npz \
-  data.graph_path=data/METR-LA/adj.npz \
-  model.num_nodes=207 \
-  model.input_dim=1 \
-  model.output_dim=1
+  data.graph_path=data/METR-LA/adj.npz
 ```
 
 Auto-resume from `runs/<work_dir>/checkpoints/latest.pt`:
@@ -1213,10 +1224,7 @@ basicstfm train configs/examples/file_forecasting.yaml \
   --cfg-options \
   trainer.auto_resume=true \
   data.data_path=data/METR-LA/data.npz \
-  data.graph_path=data/METR-LA/adj.npz \
-  model.num_nodes=207 \
-  model.input_dim=1 \
-  model.output_dim=1
+  data.graph_path=data/METR-LA/adj.npz
 ```
 
 For normal transfer or fine-tuning, use stage-level `load_from`:
