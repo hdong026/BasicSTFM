@@ -75,6 +75,42 @@ mkdir -p data/<DATASET_NAME>/raw
 wget -O data/<DATASET_NAME>/raw/<RAW_FILE_NAME> "<DATASET_URL>"
 ```
 
+## One-Command Batch Preparation
+
+If datasets are organized under `data/raw_data/`, preview the automatic plan:
+
+```bash
+python scripts/data/prepare_all.py \
+  --raw-root data/raw_data \
+  --output-root data \
+  --dry-run
+```
+
+Prepare all datasets:
+
+```bash
+python scripts/data/prepare_all.py \
+  --raw-root data/raw_data \
+  --output-root data
+```
+
+Prepare selected datasets:
+
+```bash
+python scripts/data/prepare_all.py \
+  --raw-root data/raw_data \
+  --output-root data \
+  --datasets METR-LA PEMS-BAY PEMS04
+```
+
+This writes:
+
+```text
+data/<DATASET_NAME>/data.npz
+data/<DATASET_NAME>/adj.npz
+data/<DATASET_NAME>/README.md
+```
+
 If your data is already in `.npy` or `.npz` format, convert it to the canonical layout:
 
 ```bash

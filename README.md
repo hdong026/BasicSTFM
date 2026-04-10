@@ -58,6 +58,7 @@ BasicSTFM/
   scripts/
     data/
       prepare_npz.py
+      prepare_all.py
       inspect_npz.py
   src/
     basicstfm/
@@ -88,6 +89,7 @@ Important files:
 - `configs/examples/file_forecasting.yaml`: generic file-backed forecasting template.
 - `data/README.md`: expected dataset layout and preprocessing guide.
 - `scripts/data/prepare_npz.py`: generic converter for `.h5`, `.pkl`, `.npy`, `.npz`, `.csv`, and `.txt`.
+- `scripts/data/prepare_all.py`: one-command batch converter for `data/raw_data/*`.
 - `scripts/data/inspect_npz.py`: utility for checking stored array keys and shapes.
 - `examples/custom_model.py`: custom model example.
 - `examples/custom_loss.py`: custom loss example.
@@ -486,6 +488,88 @@ Or copy files from local storage:
 
 ```bash
 cp /path/to/raw/files/* data/<DATASET_NAME>/raw/
+```
+
+### One-Command Batch Preparation
+
+If your downloaded datasets are organized under `data/raw_data/`, for example:
+
+```text
+data/
+  raw_data/
+    LargeST/
+      ca_his_raw_2017.h5
+      ca_his_raw_2018.h5
+      ca_rn_adj.npy
+    METR-LA/
+      METR-LA.h5
+      adj_METR-LA.pkl
+    PEMS-BAY/
+      PEMS-BAY.h5
+      adj_PEMS-BAY.pkl
+    PEMS04/
+      PEMS04.npz
+      adj_PEMS04.pkl
+```
+
+Preview the automatic file selection:
+
+```bash
+python scripts/data/prepare_all.py \
+  --raw-root data/raw_data \
+  --output-root data \
+  --dry-run
+```
+
+Prepare every dataset:
+
+```bash
+python scripts/data/prepare_all.py \
+  --raw-root data/raw_data \
+  --output-root data
+```
+
+Regenerate existing prepared files:
+
+```bash
+python scripts/data/prepare_all.py \
+  --raw-root data/raw_data \
+  --output-root data \
+  --overwrite
+```
+
+Prepare only selected datasets:
+
+```bash
+python scripts/data/prepare_all.py \
+  --raw-root data/raw_data \
+  --output-root data \
+  --datasets METR-LA PEMS-BAY PEMS04
+```
+
+The script writes:
+
+```text
+data/<DATASET_NAME>/data.npz
+data/<DATASET_NAME>/adj.npz
+data/<DATASET_NAME>/README.md
+```
+
+Heuristics:
+
+- time-series files prefer `.npz`, then `.h5/.hdf5`, then non-adjacency `.csv/.txt`, then `.npy`;
+- adjacency files prefer names containing `adj`, `adjacency`, `graph`, `distance`, or `dist`;
+- DCRNN/BasicTS-style adjacency pickle tuples use the third element by default;
+- multiple time-series files in one dataset directory are sorted by name and concatenated along the time axis;
+- `[T, N]` time-series arrays are automatically converted to `[T, N, 1]`.
+
+If a dataset has no graph, pass:
+
+```bash
+python scripts/data/prepare_all.py \
+  --raw-root data/raw_data \
+  --output-root data \
+  --allow-missing-adj
 ```
 
 ### Canonical Data Format
