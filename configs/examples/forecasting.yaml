@@ -1,0 +1,58 @@
+experiment_name: synthetic_forecasting
+seed: 42
+
+trainer:
+  type: MultiStageTrainer
+  device: auto
+  work_dir: runs/synthetic_forecasting
+  log_every: 20
+
+data:
+  type: SyntheticDataModule
+  num_timesteps: 720
+  num_nodes: 32
+  num_channels: 2
+  input_len: 24
+  target_len: 12
+  batch_size: 32
+  split: [0.7, 0.1, 0.2]
+  scaler:
+    type: standard
+
+model:
+  type: TinySTFoundationModel
+  num_nodes: 32
+  input_dim: 2
+  output_dim: 2
+  input_len: 24
+  output_len: 12
+  hidden_dim: 64
+  num_layers: 2
+  num_heads: 4
+  ffn_dim: 128
+  dropout: 0.1
+
+pipeline:
+  stages:
+    - name: forecasting
+      epochs: 3
+      task:
+        type: ForecastingTask
+      losses:
+        - type: mae
+          weight: 1.0
+        - type: mse
+          weight: 0.1
+      metrics:
+        - type: mae
+        - type: rmse
+      optimizer:
+        type: AdamW
+        lr: 0.001
+        weight_decay: 0.0001
+      scheduler:
+        type: CosineAnnealingLR
+        T_max: 3
+      validate_every: 1
+      save_best_by: val/loss/total
+      gradient_clip_val: 5.0

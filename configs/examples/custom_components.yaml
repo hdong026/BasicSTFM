@@ -1,0 +1,45 @@
+experiment_name: custom_components_demo
+seed: 42
+
+custom_imports:
+  - examples.custom_model
+  - examples.custom_loss
+
+trainer:
+  type: MultiStageTrainer
+  device: auto
+  work_dir: runs/custom_components_demo
+
+data:
+  type: SyntheticDataModule
+  num_timesteps: 360
+  num_nodes: 16
+  num_channels: 1
+  input_len: 12
+  target_len: 6
+  batch_size: 16
+
+model:
+  type: ResidualMLPForecaster
+  num_nodes: 16
+  input_dim: 1
+  output_dim: 1
+  input_len: 12
+  output_len: 6
+  hidden_dim: 64
+
+pipeline:
+  stages:
+    - name: custom_forecast
+      epochs: 2
+      task:
+        type: ForecastingTask
+      losses:
+        - type: smooth_l1_mae_mix
+          alpha: 0.6
+          weight: 1.0
+      metrics:
+        - type: mae
+      optimizer:
+        type: AdamW
+        lr: 0.001

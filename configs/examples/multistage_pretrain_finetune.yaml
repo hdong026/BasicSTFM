@@ -1,0 +1,80 @@
+experiment_name: synthetic_pretrain_finetune
+seed: 7
+
+trainer:
+  type: MultiStageTrainer
+  device: auto
+  work_dir: runs/synthetic_pretrain_finetune
+  log_every: 25
+
+data:
+  type: SyntheticDataModule
+  num_timesteps: 960
+  num_nodes: 48
+  num_channels: 2
+  input_len: 24
+  target_len: 12
+  batch_size: 32
+  split: [0.7, 0.1, 0.2]
+  scaler:
+    type: standard
+
+model:
+  type: TinySTFoundationModel
+  num_nodes: 48
+  input_dim: 2
+  output_dim: 2
+  input_len: 24
+  output_len: 12
+  hidden_dim: 96
+  num_layers: 3
+  num_heads: 4
+  ffn_dim: 192
+  dropout: 0.1
+
+pipeline:
+  stages:
+    - name: masked_pretrain
+      epochs: 5
+      task:
+        type: MaskedReconstructionTask
+        mask_ratio: 0.35
+      losses:
+        - type: mse
+          weight: 1.0
+      metrics:
+        - type: mae
+      optimizer:
+        type: AdamW
+        lr: 0.001
+        weight_decay: 0.0001
+      scheduler:
+        type: CosineAnnealingLR
+        T_max: 5
+      validate_every: 1
+      gradient_clip_val: 5.0
+
+    - name: forecast_finetune
+      epochs: 3
+      load_from: previous
+      strict_load: true
+      task:
+        type: ForecastingTask
+      losses:
+        - type: mae
+          weight: 1.0
+        - type: mse
+          weight: 0.05
+      metrics:
+        - type: mae
+        - type: rmse
+      optimizer:
+        type: AdamW
+        lr: 0.0005
+        weight_decay: 0.0001
+      scheduler:
+        type: CosineAnnealingLR
+        T_max: 3
+      validate_every: 1
+      save_best_by: val/loss/total
+      gradient_clip_val: 5.0
