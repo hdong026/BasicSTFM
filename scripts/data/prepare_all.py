@@ -216,7 +216,7 @@ def prepare_dataset(
         )
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    data = load_and_stack_data(plan.data_files, key=input_key or data_key, dtype=dtype)
+    data = load_and_stack_data(plan.data_files, key=input_key, dtype=dtype)
     if add_channel and data.ndim == 2:
         data = data[..., None]
     if data.ndim != 3:

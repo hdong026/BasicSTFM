@@ -558,6 +558,7 @@ data/<DATASET_NAME>/README.md
 Heuristics:
 
 - time-series files prefer `.npz`, then `.h5/.hdf5`, then non-adjacency `.csv/.txt`, then `.npy`;
+- HDF5 and NPZ input keys are auto-detected when possible;
 - adjacency files prefer names containing `adj`, `adjacency`, `graph`, `distance`, or `dist`;
 - DCRNN/BasicTS-style adjacency pickle tuples use the third element by default;
 - multiple time-series files in one dataset directory are sorted by name and concatenated along the time axis;
@@ -570,6 +571,24 @@ python scripts/data/prepare_all.py \
   --raw-root data/raw_data \
   --output-root data \
   --allow-missing-adj
+```
+
+If a specific HDF5/NPZ file has multiple candidate arrays, inspect it first:
+
+```bash
+python scripts/data/prepare_npz.py \
+  --input data/raw_data/<DATASET_NAME>/<FILE>.h5 \
+  --list-keys
+```
+
+Then process that dataset with:
+
+```bash
+python scripts/data/prepare_all.py \
+  --raw-root data/raw_data \
+  --output-root data \
+  --datasets <DATASET_NAME> \
+  --input-key <KEY>
 ```
 
 ### Canonical Data Format

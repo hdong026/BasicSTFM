@@ -94,6 +94,24 @@ python scripts/data/prepare_all.py \
   --output-root data
 ```
 
+HDF5 and NPZ input keys are auto-detected when possible. If a file has multiple candidate arrays, inspect it first:
+
+```bash
+python scripts/data/prepare_npz.py \
+  --input data/raw_data/<DATASET_NAME>/<FILE>.h5 \
+  --list-keys
+```
+
+Then process that dataset with:
+
+```bash
+python scripts/data/prepare_all.py \
+  --raw-root data/raw_data \
+  --output-root data \
+  --datasets <DATASET_NAME> \
+  --input-key <KEY>
+```
+
 Prepare selected datasets:
 
 ```bash

@@ -108,7 +108,7 @@ def main() -> None:
 
     array = load_array(
         args.input,
-        key=args.input_key or args.key,
+        key=args.input_key,
         output_key=args.key,
         delimiter=args.delimiter,
         pkl_index=args.pkl_index,
