@@ -1,3 +1,6 @@
+# Recommended environment:
+#   conda create -n basicstfm python=3.10 -y
+#
 # Runtime dependencies
 numpy>=1.23
 PyYAML>=6.0

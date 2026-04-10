@@ -13,7 +13,7 @@ The framework follows the configuration-centric philosophy of [BasicTS](https://
 - Custom model, loss, metric, and task injection through `custom_imports`.
 - Built-in synthetic data for immediate smoke testing without external datasets.
 - Built-in `TinySTFoundationModel` and `MLPForecaster` baselines.
-- Ubuntu-friendly setup with `requirements.txt` and editable installation.
+- Conda-first setup with `requirements.txt` and editable installation.
 
 ## Design Overview
 
@@ -79,26 +79,43 @@ Important files:
 - `examples/custom_loss.py`: custom loss example.
 - `examples/custom_task.py`: custom task example.
 
-## Ubuntu Installation From GitHub
+## Installation From GitHub
 
-The following instructions assume Ubuntu 22.04 or Ubuntu 24.04. They also work on most recent Debian-based Linux distributions with minor package-name adjustments.
+The following instructions assume that Conda is already available on your machine. The recommended Python version is **Python 3.10**.
 
-### Step 1: Install System Packages
+Why Python 3.10:
+
+- BasicSTFM declares `requires-python >= 3.9`.
+- The dependency list uses `torch>=2.1`, and Python 3.10 is a conservative, widely supported choice for PyTorch CPU and CUDA workflows.
+- Python 3.10 avoids unnecessary compatibility issues that may appear with very new Python versions on research servers.
+
+### Step 1: Create a Conda Environment
 
 ```bash
-sudo apt update
-sudo apt install -y git python3 python3-venv python3-pip build-essential
+conda create -n basicstfm python=3.10 -y
+conda activate basicstfm
 ```
 
-Verify Python:
+Verify the active Python interpreter:
 
 ```bash
-python3 --version
+python --version
+which python
 ```
 
-BasicSTFM requires Python 3.9 or newer.
+Expected Python version:
 
-### Step 2: Clone the Repository
+```text
+Python 3.10.x
+```
+
+Expected interpreter path should contain the Conda environment name:
+
+```text
+.../envs/basicstfm/bin/python
+```
+
+### Step 2: Clone the Repository From GitHub
 
 Use HTTPS:
 
@@ -112,6 +129,13 @@ Or use SSH:
 ```bash
 git clone git@github.com:<your-org-or-username>/BasicSTFM.git
 cd BasicSTFM
+```
+
+If `git` is not available on Ubuntu, install it with:
+
+```bash
+sudo apt update
+sudo apt install -y git
 ```
 
 If you already cloned the repository and want the latest version:
@@ -139,41 +163,15 @@ src
 tests
 ```
 
-### Step 3: Create a Virtual Environment
-
-```bash
-python3 -m venv .venv
-```
-
-Activate it:
-
-```bash
-source .venv/bin/activate
-```
-
-After activation, your prompt should usually contain `(.venv)`.
-
-Verify the Python interpreter:
-
-```bash
-which python
-```
-
-Expected output:
-
-```text
-.../BasicSTFM/.venv/bin/python
-```
-
-### Step 4: Upgrade Packaging Tools
+### Step 3: Upgrade Packaging Tools
 
 ```bash
 python -m pip install --upgrade pip setuptools wheel
 ```
 
-### Step 5: Install Python Dependencies
+### Step 4: Install Dependencies
 
-Install dependencies from `requirements.txt`:
+Install the dependencies listed in `requirements.txt`:
 
 ```bash
 pip install -r requirements.txt
@@ -187,24 +185,26 @@ pip install -e .
 
 Editable mode is recommended for research development because changes under `src/basicstfm/` take effect without reinstalling the package.
 
-Alternative one-line developer installation:
+### Step 5: PyTorch Notes
 
-```bash
-pip install -e ".[dev]"
+The default `requirements.txt` includes:
+
+```text
+torch>=2.1
 ```
 
-### Step 6: PyTorch Notes
+This is suitable for CPU execution and many standard Linux environments.
 
-The default `requirements.txt` includes `torch>=2.1`, which is suitable for a basic CPU setup and many standard Linux environments.
-
-If you need a CUDA-specific PyTorch build, install the PyTorch wheel that matches your CUDA driver before installing BasicSTFM dependencies. A common workflow is:
+For CUDA training, install the PyTorch build that matches your CUDA driver before installing the remaining requirements. A typical workflow is:
 
 ```bash
-pip install --upgrade pip setuptools wheel
+python -m pip install --upgrade pip setuptools wheel
 # Install your CUDA-compatible PyTorch build here.
 pip install -r requirements.txt
 pip install -e .
 ```
+
+Use the official PyTorch installation selector to choose the correct CUDA command for your machine.
 
 Check whether PyTorch can see CUDA:
 
@@ -218,7 +218,7 @@ if torch.cuda.is_available():
 PY
 ```
 
-### Step 7: Verify the Command Line Interface
+### Step 6: Verify the Command Line Interface
 
 ```bash
 basicstfm --help
@@ -781,17 +781,15 @@ If `work_dir` is omitted, BasicSTFM uses:
 runs/<experiment_name>/<timestamp>/
 ```
 
-## Recommended Ubuntu Workflow
+## Recommended Conda Workflow
 
-For a fresh Ubuntu machine, run the following commands in order:
+For a fresh clone, run the following commands in order:
 
 ```bash
-sudo apt update
-sudo apt install -y git python3 python3-venv python3-pip build-essential
+conda create -n basicstfm python=3.10 -y
+conda activate basicstfm
 git clone https://github.com/<your-org-or-username>/BasicSTFM.git
 cd BasicSTFM
-python3 -m venv .venv
-source .venv/bin/activate
 python -m pip install --upgrade pip setuptools wheel
 pip install -r requirements.txt
 pip install -e .
@@ -811,7 +809,7 @@ To update the repository:
 ```bash
 cd BasicSTFM
 git pull --ff-only
-source .venv/bin/activate
+conda activate basicstfm
 pip install -r requirements.txt
 pip install -e .
 ```
@@ -825,27 +823,30 @@ basicstfm dry-run configs/examples/multistage_pretrain_finetune.yaml
 
 ## Troubleshooting
 
-### `python3 -m venv .venv` fails
+### `conda: command not found`
 
-Install the Ubuntu venv package:
+Conda is not available in the current shell. Install Miniconda or Anaconda first, then restart the shell.
+
+If Conda is installed but not initialized, initialize it for Bash:
 
 ```bash
-sudo apt update
-sudo apt install -y python3-venv
+conda init bash
+source ~/.bashrc
 ```
 
-Then recreate the environment:
+Then create the environment again:
 
 ```bash
-python3 -m venv .venv
+conda create -n basicstfm python=3.10 -y
+conda activate basicstfm
 ```
 
 ### `basicstfm` command not found
 
-Activate the virtual environment:
+Activate the Conda environment:
 
 ```bash
-source .venv/bin/activate
+conda activate basicstfm
 ```
 
 Reinstall the package:
