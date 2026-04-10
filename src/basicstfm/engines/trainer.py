@@ -70,6 +70,8 @@ class MultiStageTrainer:
         self.logger.info("Starting stage %s for %d epoch(s)", stage.name, stage.epochs)
         self._apply_trainability(stage)
         task = TASKS.build(stage.task)
+        if hasattr(task, "set_scaler") and hasattr(self.datamodule, "get_scaler"):
+            task.set_scaler(self.datamodule.get_scaler())
         losses = LossCollection(stage.losses).to(self.device)
         metrics = MetricCollection(stage.metrics).to(self.device)
         optimizer = build_optimizer(stage.optimizer, self.model.parameters())

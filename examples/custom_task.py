@@ -19,8 +19,10 @@ class ForecastWithAuxEmbeddingPenalty(Task):
 
     def step(self, model: torch.nn.Module, batch: Dict[str, Any], losses, device: torch.device):
         batch = move_to_device(batch, device)
-        outputs = model(batch["x"], graph=batch.get("graph"), mode="both")
-        loss_out = losses(outputs["forecast"], batch["y"])
+        x = self.transform(batch["x"])
+        outputs = model(x, graph=batch.get("graph"), mode="both")
+        forecast = self.inverse_transform(outputs["forecast"])
+        loss_out = losses(forecast, batch["y"])
         penalty = outputs["embedding"].pow(2).mean() * self.penalty_weight
         total = loss_out["loss"] + penalty
         logs = dict(loss_out["logs"])
@@ -29,6 +31,6 @@ class ForecastWithAuxEmbeddingPenalty(Task):
         return {
             "loss": total,
             "logs": logs,
-            "pred": outputs["forecast"].detach(),
+            "pred": forecast.detach(),
             "target": batch["y"].detach(),
         }

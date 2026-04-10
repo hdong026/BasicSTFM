@@ -23,6 +23,21 @@ def move_to_device(value: Any, device: torch.device) -> Any:
 class Task(ABC):
     """A task owns the per-batch training logic for a stage."""
 
+    def set_scaler(self, scaler: object) -> None:
+        self.scaler = scaler
+
+    def transform(self, value: torch.Tensor) -> torch.Tensor:
+        scaler = getattr(self, "scaler", None)
+        if scaler is None:
+            return value
+        return scaler.transform(value)
+
+    def inverse_transform(self, value: torch.Tensor) -> torch.Tensor:
+        scaler = getattr(self, "scaler", None)
+        if scaler is None:
+            return value
+        return scaler.inverse_transform(value)
+
     @abstractmethod
     def step(self, model: torch.nn.Module, batch: Dict[str, Any], losses, device: torch.device):
         raise NotImplementedError

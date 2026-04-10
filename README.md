@@ -13,6 +13,7 @@ The framework follows the configuration-centric philosophy of [BasicTS](https://
 - Custom model, loss, metric, and task injection through `custom_imports`.
 - Built-in synthetic data for immediate smoke testing without external datasets.
 - Built-in `TinySTFoundationModel` and `MLPForecaster` baselines.
+- BasicTS-style scale/rescale flow: scale model inputs and compute losses/metrics after inverse transformation.
 - Conda-first setup with `requirements.txt` and editable installation.
 
 ## Design Overview
@@ -36,9 +37,13 @@ This separation is the central design choice. A forecasting fine-tuning stage, a
 
 ```text
 BasicSTFM/
+  .gitignore
   README.md
   requirements.txt
   pyproject.toml
+  data/
+    README.md
+    .gitkeep
   configs/
     examples/
       forecasting.yaml
@@ -49,6 +54,10 @@ BasicSTFM/
     custom_model.py
     custom_loss.py
     custom_task.py
+  scripts/
+    data/
+      prepare_npz.py
+      inspect_npz.py
   src/
     basicstfm/
       cli.py
@@ -75,6 +84,9 @@ Important files:
 - `configs/examples/forecasting.yaml`: single-stage forecasting example.
 - `configs/examples/multistage_pretrain_finetune.yaml`: masked pretraining followed by forecasting fine-tuning.
 - `configs/examples/custom_components.yaml`: example using user-defined model and loss.
+- `data/README.md`: expected dataset layout and preprocessing guide.
+- `scripts/data/prepare_npz.py`: utility for converting simple raw arrays to canonical `.npz`.
+- `scripts/data/inspect_npz.py`: utility for checking stored array keys and shapes.
 - `examples/custom_model.py`: custom model example.
 - `examples/custom_loss.py`: custom loss example.
 - `examples/custom_task.py`: custom task example.
@@ -404,6 +416,176 @@ pipeline.stages.0.epochs=1
 pipeline.stages.1.optimizer.lr=0.0001
 ```
 
+## Data Directory and Dataset Preparation
+
+BasicSTFM includes a `data/` directory, but large datasets are ignored by Git. This keeps the repository lightweight while still documenting the expected on-disk layout.
+
+The recommended structure is:
+
+```text
+data/
+  README.md
+  <DATASET_NAME>/
+    raw/
+      original_files_from_provider
+    data.npz
+    adj.npz
+    README.md
+```
+
+Example:
+
+```text
+data/
+  METR-LA/
+    raw/
+      metr_la.csv
+      adj.csv
+    data.npz
+    adj.npz
+    README.md
+```
+
+The `.gitignore` keeps downloaded data out of version control:
+
+```text
+data/**
+!data/
+!data/.gitkeep
+!data/README.md
+!data/*/
+!data/*/README.md
+!data/examples/
+!data/examples/**
+```
+
+This means Git tracks the data instructions, but not large benchmark files.
+
+### Downloading Data
+
+BasicSTFM does not vendor benchmark datasets. Download datasets from their official source, benchmark repository, or lab storage.
+
+For datasets commonly used with BasicTS-style traffic forecasting experiments, consult the data preparation links in the [BasicTS repository](https://github.com/GestaltCogTeam/BasicTS) and place the downloaded files under `data/<DATASET_NAME>/raw/` before conversion.
+
+Create a dataset directory:
+
+```bash
+mkdir -p data/<DATASET_NAME>/raw
+```
+
+Download with `wget` if you have a direct URL:
+
+```bash
+wget -O data/<DATASET_NAME>/raw/<RAW_FILE_NAME> "<DATASET_URL>"
+```
+
+Or copy files from local storage:
+
+```bash
+cp /path/to/raw/files/* data/<DATASET_NAME>/raw/
+```
+
+### Canonical Data Format
+
+The canonical time-series file is:
+
+```text
+data/<DATASET_NAME>/data.npz
+```
+
+It should contain key `data`:
+
+```text
+data: [T, N, C]
+```
+
+Where:
+
+- `T` is the number of timesteps.
+- `N` is the number of spatial nodes.
+- `C` is the number of channels.
+
+The optional graph file is:
+
+```text
+data/<DATASET_NAME>/adj.npz
+```
+
+It should contain key `adj`:
+
+```text
+adj: [N, N]
+```
+
+### Do I Need Preprocessing?
+
+You need preprocessing if your raw files are not already stored as `[T, N, C]`.
+
+Common cases:
+
+- Raw `[T, N]`: add a channel dimension and save as `[T, N, 1]`.
+- Raw `[T, N, C]`: save directly as `data.npz` with key `data`.
+- Raw CSV matrix `[T, N]`: convert with `--add-channel`.
+- Raw flattened table: reshape explicitly with `--shape T N C`.
+- Raw timestamp/sensor table: pivot externally into `[T, N]` or `[T, N, C]`.
+- Raw edge list: convert externally into adjacency matrix `[N, N]`.
+
+### Converting Raw Arrays to `.npz`
+
+Convert a CSV matrix `[T, N]` into canonical `[T, N, 1]`:
+
+```bash
+python scripts/data/prepare_npz.py \
+  --input data/<DATASET_NAME>/raw/<RAW_FILE>.csv \
+  --output data/<DATASET_NAME>/data.npz \
+  --key data \
+  --add-channel
+```
+
+Convert a `.npy` array that is already `[T, N, C]`:
+
+```bash
+python scripts/data/prepare_npz.py \
+  --input data/<DATASET_NAME>/raw/<RAW_ARRAY>.npy \
+  --output data/<DATASET_NAME>/data.npz \
+  --key data
+```
+
+Convert a flattened CSV and reshape it:
+
+```bash
+python scripts/data/prepare_npz.py \
+  --input data/<DATASET_NAME>/raw/<RAW_FILE>.csv \
+  --output data/<DATASET_NAME>/data.npz \
+  --key data \
+  --shape T N C
+```
+
+Replace `T`, `N`, and `C` with concrete integers.
+
+Convert an adjacency matrix:
+
+```bash
+python scripts/data/prepare_npz.py \
+  --input data/<DATASET_NAME>/raw/adj.csv \
+  --output data/<DATASET_NAME>/adj.npz \
+  --key adj
+```
+
+Inspect the prepared files:
+
+```bash
+python scripts/data/inspect_npz.py data/<DATASET_NAME>/data.npz
+python scripts/data/inspect_npz.py data/<DATASET_NAME>/adj.npz
+```
+
+Expected output should show keys and shapes:
+
+```text
+data: shape=(T, N, C), dtype=float32, min=..., max=...
+adj: shape=(N, N), dtype=float32, min=..., max=...
+```
+
 ## Data Interface
 
 Built-in tasks expect batches with the following keys:
@@ -482,6 +664,48 @@ model:
   output_dim: 1
   input_len: 24
   output_len: 12
+```
+
+## Scaling and Rescaling
+
+BasicSTFM now follows the same high-level scale/rescale convention that makes BasicTS convenient for forecasting experiments:
+
+1. The scaler is fitted on the training split only.
+2. The dataloader returns raw-value windows.
+3. Built-in tasks scale `x` before sending it to the model.
+4. Model outputs are inverse-transformed back to the original data scale.
+5. Losses and metrics are computed on the original scale.
+
+This design gives the model numerically stable inputs while keeping logged losses and metrics interpretable.
+
+Example config:
+
+```yaml
+data:
+  type: WindowDataModule
+  data_path: data/<DATASET_NAME>/data.npz
+  input_key: data
+  input_len: 24
+  target_len: 12
+  scaler:
+    type: standard
+```
+
+The default `standard` scaler computes channel-wise statistics over the training split:
+
+```text
+mean: [1, 1, C]
+std:  [1, 1, C]
+```
+
+For batch tensors shaped `[B, T, N, C]`, these statistics are broadcast automatically.
+
+To disable scaling:
+
+```yaml
+data:
+  scaler:
+    type: identity
 ```
 
 ## Model Configuration

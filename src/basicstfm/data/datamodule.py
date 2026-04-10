@@ -97,14 +97,11 @@ class WindowDataModule:
         test_raw = array[train_len + val_len : train_len + val_len + test_len]
 
         self.scaler.fit(train_raw)
-        train = self.scaler.transform(train_raw)
-        val = self.scaler.transform(val_raw)
-        test = self.scaler.transform(test_raw)
 
         self.datasets = {
-            "train": WindowDataset(train, self.input_len, self.target_len, self.stride),
-            "val": WindowDataset(val, self.input_len, self.target_len, self.stride),
-            "test": WindowDataset(test, self.input_len, self.target_len, self.stride),
+            "train": WindowDataset(train_raw, self.input_len, self.target_len, self.stride),
+            "val": WindowDataset(val_raw, self.input_len, self.target_len, self.stride),
+            "test": WindowDataset(test_raw, self.input_len, self.target_len, self.stride),
         }
 
         if self.graph_path:
@@ -136,6 +133,9 @@ class WindowDataModule:
         if self.graph is not None:
             batch["graph"] = self.graph
         return batch
+
+    def get_scaler(self) -> object:
+        return self.scaler
 
 
 @DATAMODULES.register()
@@ -202,12 +202,12 @@ class SyntheticDataModule(WindowDataModule):
         self.scaler.fit(train_raw)
         self.datasets = {
             "train": WindowDataset(
-                self.scaler.transform(train_raw), self.input_len, self.target_len, self.stride
+                train_raw, self.input_len, self.target_len, self.stride
             ),
             "val": WindowDataset(
-                self.scaler.transform(val_raw), self.input_len, self.target_len, self.stride
+                val_raw, self.input_len, self.target_len, self.stride
             ),
             "test": WindowDataset(
-                self.scaler.transform(test_raw), self.input_len, self.target_len, self.stride
+                test_raw, self.input_len, self.target_len, self.stride
             ),
         }

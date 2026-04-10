@@ -32,17 +32,19 @@ class MaskedReconstructionTask(Task):
 
     def step(self, model: torch.nn.Module, batch: Dict[str, Any], losses, device: torch.device):
         batch = move_to_device(batch, device)
-        x = batch[self.input_key]
+        raw_x = batch[self.input_key]
+        x = self.transform(raw_x)
         mask = torch.rand_like(x[..., :1]) < self.mask_ratio
         mask = mask.expand_as(x)
         masked_x = x.masked_fill(mask, self.mask_value)
         outputs = model(masked_x, graph=batch.get("graph"), mask=mask, mode=self.model_mode)
-        pred = outputs[self.output_key] if isinstance(outputs, dict) else outputs
-        loss_out = losses(pred, x, mask=mask)
+        pred_scaled = outputs[self.output_key] if isinstance(outputs, dict) else outputs
+        pred = self.inverse_transform(pred_scaled)
+        loss_out = losses(pred, raw_x, mask=mask)
         return {
             "loss": loss_out["loss"],
             "logs": loss_out["logs"],
             "pred": pred.detach(),
-            "target": x.detach(),
+            "target": raw_x.detach(),
             "mask": mask.detach(),
         }
