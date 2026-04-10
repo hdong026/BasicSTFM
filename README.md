@@ -1137,10 +1137,13 @@ Expected output:
 ```text
 runs/synthetic_pretrain_finetune/
   checkpoints/
+    latest.pt
     masked_pretrain_best.pt
     masked_pretrain_last.pt
+    masked_pretrain_001.pt
     forecast_finetune_best.pt
     forecast_finetune_last.pt
+    forecast_finetune_001.pt
 ```
 
 If `work_dir` is omitted, BasicSTFM uses:
@@ -1148,6 +1151,84 @@ If `work_dir` is omitted, BasicSTFM uses:
 ```text
 runs/<experiment_name>/<timestamp>/
 ```
+
+## Checkpointing and Resume
+
+BasicSTFM saves checkpoints during training in a BasicTS-style workflow. By default, each stage writes:
+
+```text
+runs/<experiment_name>/checkpoints/
+  latest.pt
+  <stage_name>_best.pt
+  <stage_name>_last.pt
+  <stage_name>_001.pt
+  <stage_name>_002.pt
+```
+
+Checkpoint meanings:
+
+- `latest.pt`: most recent full training checkpoint across stages.
+- `<stage_name>_last.pt`: most recent checkpoint for that stage.
+- `<stage_name>_best.pt`: best validation checkpoint according to `save_best_by`.
+- `<stage_name>_NNN.pt`: epoch-numbered checkpoint.
+
+Checkpoint files include:
+
+- model state;
+- optimizer state;
+- scheduler state;
+- stage name and stage index;
+- completed epoch;
+- current score and best score.
+
+Stage-level checkpoint options:
+
+```yaml
+pipeline:
+  stages:
+    - name: forecasting
+      save_every: 1
+      save_best: true
+      save_last: true
+      save_epoch_checkpoints: true
+```
+
+Resume from a specific checkpoint:
+
+```bash
+basicstfm train configs/examples/file_forecasting.yaml \
+  --cfg-options \
+  trainer.resume_from=runs/file_forecasting/checkpoints/latest.pt \
+  data.data_path=data/METR-LA/data.npz \
+  data.graph_path=data/METR-LA/adj.npz \
+  model.num_nodes=207 \
+  model.input_dim=1 \
+  model.output_dim=1
+```
+
+Auto-resume from `runs/<work_dir>/checkpoints/latest.pt`:
+
+```bash
+basicstfm train configs/examples/file_forecasting.yaml \
+  --cfg-options \
+  trainer.auto_resume=true \
+  data.data_path=data/METR-LA/data.npz \
+  data.graph_path=data/METR-LA/adj.npz \
+  model.num_nodes=207 \
+  model.input_dim=1 \
+  model.output_dim=1
+```
+
+For normal transfer or fine-tuning, use stage-level `load_from`:
+
+```yaml
+pipeline:
+  stages:
+    - name: forecast_finetune
+      load_from: runs/pretrain/checkpoints/masked_pretrain_best.pt
+```
+
+Use `resume_from` when continuing an interrupted run. Use `load_from` when starting a new stage from pretrained weights.
 
 ## Recommended Conda Workflow
 

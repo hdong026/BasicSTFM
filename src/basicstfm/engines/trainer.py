@@ -15,7 +15,7 @@ from basicstfm.losses.common import LossCollection
 from basicstfm.metrics.common import MetricCollection
 from basicstfm.optim.factory import build_optimizer, build_scheduler
 from basicstfm.registry import DATAMODULES, MODELS, TASKS, TRAINERS
-from basicstfm.utils.checkpoint import load_checkpoint, save_checkpoint
+from basicstfm.utils.checkpoint import load_checkpoint, read_checkpoint_metadata, save_checkpoint
 from basicstfm.utils.logging import get_logger
 from basicstfm.utils.seed import seed_everything
 
@@ -30,10 +30,16 @@ class MultiStageTrainer:
         work_dir: Optional[str] = None,
         device: str = "auto",
         log_every: int = 20,
+        resume_from: Optional[str] = None,
+        auto_resume: bool = False,
+        resume_strict: bool = True,
         dry_run: bool = False,
     ) -> None:
         self.cfg = cfg
         self.log_every = int(log_every)
+        self.resume_from = resume_from
+        self.auto_resume = auto_resume
+        self.resume_strict = resume_strict
         self.dry_run = dry_run
         self.logger = get_logger()
         self.plan = StagePlan.from_config(cfg)
@@ -42,6 +48,9 @@ class MultiStageTrainer:
         self.datamodule = None
         self.model: Optional[torch.nn.Module] = None
         self.last_checkpoint: Optional[str] = None
+        self._resume_checkpoint: Optional[str] = None
+        self._resume_metadata: Dict[str, Any] = {}
+        self._resume_consumed = False
 
     def run(self) -> None:
         seed_everything(int(self.cfg.get("seed", 42)))
@@ -51,8 +60,16 @@ class MultiStageTrainer:
             return
 
         self.setup()
-        for stage in self.plan.stages:
-            self.run_stage(stage)
+        self._prepare_resume()
+        resume_stage_index = self._resume_stage_index()
+        for stage_index, stage in enumerate(self.plan.stages):
+            if resume_stage_index is not None and stage_index < resume_stage_index:
+                self.logger.info(
+                    "Skipping completed stage %s due to resume checkpoint",
+                    stage.name,
+                )
+                continue
+            self.run_stage(stage, stage_index)
 
     def setup(self) -> None:
         self.work_dir.mkdir(parents=True, exist_ok=True)
@@ -63,7 +80,7 @@ class MultiStageTrainer:
         self.logger.info("Model: %s", self.model.__class__.__name__)
         self.logger.info("Device: %s", self.device)
 
-    def run_stage(self, stage: StageSpec) -> None:
+    def run_stage(self, stage: StageSpec, stage_index: int = 0) -> None:
         if self.model is None or self.datamodule is None:
             raise RuntimeError("Trainer.setup must run before run_stage")
 
@@ -76,8 +93,36 @@ class MultiStageTrainer:
         metrics = MetricCollection(stage.metrics).to(self.device)
         optimizer = build_optimizer(stage.optimizer, self.model.parameters())
         scheduler = build_scheduler(stage.scheduler, optimizer)
+        start_epoch = 1
+        best_score = float("inf")
+        resumed_this_stage = False
 
-        if stage.load_from:
+        if self._should_resume_stage(stage, stage_index):
+            ckpt_path = str(self._resume_checkpoint)
+            info = load_checkpoint(
+                ckpt_path,
+                self.model,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                strict=self.resume_strict,
+                map_location=str(self.device),
+            )
+            extra = info.get("extra", {})
+            start_epoch = int(extra.get("epoch", 0)) + 1
+            best_score = float(extra.get("best_score", extra.get("score", best_score)))
+            self.last_checkpoint = ckpt_path
+            self._resume_consumed = True
+            resumed_this_stage = True
+            self.logger.info(
+                "Resumed stage %s from %s at epoch %d (missing=%s unexpected=%s)",
+                stage.name,
+                ckpt_path,
+                start_epoch,
+                info["missing_keys"],
+                info["unexpected_keys"],
+            )
+
+        if stage.load_from and not resumed_this_stage:
             ckpt_path = self._resolve_checkpoint_reference(stage.load_from)
             info = load_checkpoint(
                 ckpt_path,
@@ -92,8 +137,15 @@ class MultiStageTrainer:
                 info["unexpected_keys"],
             )
 
-        best_score = float("inf")
-        for epoch in range(1, stage.epochs + 1):
+        if start_epoch > stage.epochs:
+            self.logger.info(
+                "Stage %s already reached epoch %d; no remaining epochs to run",
+                stage.name,
+                stage.epochs,
+            )
+            return
+
+        for epoch in range(start_epoch, stage.epochs + 1):
             score_for_scheduler: Optional[float] = None
             train_logs = self._run_loader(
                 loader=self.datamodule.train_dataloader(),
@@ -122,14 +174,19 @@ class MultiStageTrainer:
                 if score < best_score:
                     best_score = score
                     best_path = self.work_dir / "checkpoints" / f"{stage.name}_best.pt"
-                    save_checkpoint(
-                        str(best_path),
-                        self.model,
-                        optimizer=optimizer,
-                        scheduler=scheduler,
-                        extra={"stage": stage.name, "epoch": epoch, "score": best_score},
-                    )
-                    self.last_checkpoint = str(best_path)
+                    if stage.save_best:
+                        self._save_checkpoint(
+                            path=best_path,
+                            stage=stage,
+                            stage_index=stage_index,
+                            epoch=epoch,
+                            model=self.model,
+                            optimizer=optimizer,
+                            scheduler=scheduler,
+                            score=score,
+                            best_score=best_score,
+                            tag="best",
+                        )
 
             if scheduler is not None:
                 if scheduler.__class__.__name__ == "ReduceLROnPlateau":
@@ -149,15 +206,63 @@ class MultiStageTrainer:
                 self._format_logs(log_payload),
             )
 
+            if epoch % stage.save_every == 0:
+                if stage.save_epoch_checkpoints:
+                    epoch_path = self.work_dir / "checkpoints" / f"{stage.name}_{epoch:03d}.pt"
+                    self._save_checkpoint(
+                        path=epoch_path,
+                        stage=stage,
+                        stage_index=stage_index,
+                        epoch=epoch,
+                        model=self.model,
+                        optimizer=optimizer,
+                        scheduler=scheduler,
+                        score=score_for_scheduler,
+                        best_score=best_score,
+                        tag="epoch",
+                    )
+                if stage.save_last:
+                    last_path = self.work_dir / "checkpoints" / f"{stage.name}_last.pt"
+                    self._save_checkpoint(
+                        path=last_path,
+                        stage=stage,
+                        stage_index=stage_index,
+                        epoch=epoch,
+                        model=self.model,
+                        optimizer=optimizer,
+                        scheduler=scheduler,
+                        score=score_for_scheduler,
+                        best_score=best_score,
+                        tag="last",
+                    )
+                latest_path = self.work_dir / "checkpoints" / "latest.pt"
+                self._save_checkpoint(
+                    path=latest_path,
+                    stage=stage,
+                    stage_index=stage_index,
+                    epoch=epoch,
+                    model=self.model,
+                    optimizer=optimizer,
+                    scheduler=scheduler,
+                    score=score_for_scheduler,
+                    best_score=best_score,
+                    tag="latest",
+                )
+
         last_path = self.work_dir / "checkpoints" / f"{stage.name}_last.pt"
-        save_checkpoint(
-            str(last_path),
-            self.model,
-            optimizer=optimizer,
-            scheduler=scheduler,
-            extra={"stage": stage.name, "epoch": stage.epochs},
-        )
-        self.last_checkpoint = str(last_path)
+        if stage.save_last and stage.epochs % stage.save_every != 0:
+            self._save_checkpoint(
+                path=last_path,
+                stage=stage,
+                stage_index=stage_index,
+                epoch=stage.epochs,
+                model=self.model,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                score=None,
+                best_score=best_score,
+                tag="last",
+            )
         test_logs = self._run_loader(
             loader=self.datamodule.test_dataloader(),
             task=task,
@@ -238,6 +343,80 @@ class MultiStageTrainer:
                 raise RuntimeError("stage.load_from='previous' requested before any checkpoint exists")
             return self.last_checkpoint
         return reference
+
+    def _prepare_resume(self) -> None:
+        checkpoint = self.resume_from
+        if not checkpoint and self.auto_resume:
+            latest = self.work_dir / "checkpoints" / "latest.pt"
+            if latest.exists():
+                checkpoint = str(latest)
+        if not checkpoint:
+            return
+        path = Path(checkpoint)
+        if path.is_dir():
+            path = path / "latest.pt"
+        if not path.exists():
+            raise FileNotFoundError(path)
+        self._resume_checkpoint = str(path)
+        self._resume_metadata = read_checkpoint_metadata(str(path), map_location="cpu")
+        self.logger.info("Resume checkpoint selected: %s", path)
+
+    def _resume_stage_index(self) -> Optional[int]:
+        if not self._resume_checkpoint:
+            return None
+        value = self._resume_metadata.get("stage_index")
+        if value is not None:
+            return int(value)
+        stage_name = self._resume_metadata.get("stage")
+        if stage_name is None:
+            return None
+        for index, stage in enumerate(self.plan.stages):
+            if stage.name == stage_name:
+                return index
+        return None
+
+    def _should_resume_stage(self, stage: StageSpec, stage_index: int) -> bool:
+        if not self._resume_checkpoint or self._resume_consumed:
+            return False
+        resume_stage_index = self._resume_stage_index()
+        if resume_stage_index is not None:
+            return stage_index == resume_stage_index
+        resume_stage_name = self._resume_metadata.get("stage")
+        if resume_stage_name is not None:
+            return stage.name == resume_stage_name
+        return stage_index == 0
+
+    def _save_checkpoint(
+        self,
+        path: Path,
+        stage: StageSpec,
+        stage_index: int,
+        epoch: int,
+        model: torch.nn.Module,
+        optimizer: torch.optim.Optimizer,
+        scheduler: Optional[Any],
+        score: Optional[float],
+        best_score: float,
+        tag: str,
+    ) -> None:
+        extra = {
+            "stage": stage.name,
+            "stage_index": stage_index,
+            "epoch": epoch,
+            "score": score,
+            "best_score": best_score,
+            "tag": tag,
+            "work_dir": str(self.work_dir),
+        }
+        save_checkpoint(
+            str(path),
+            model,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            extra=extra,
+        )
+        self.last_checkpoint = str(path)
+        self.logger.info("Checkpoint %s saved", path)
 
     def _resolve_device(self, device: str) -> torch.device:
         if device == "auto":

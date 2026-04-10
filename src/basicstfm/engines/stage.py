@@ -22,12 +22,18 @@ class StageSpec:
     validate_every: int = 1
     save_best_by: str = "val/loss/total"
     gradient_clip_val: Optional[float] = None
+    save_every: int = 1
+    save_best: bool = True
+    save_last: bool = True
+    save_epoch_checkpoints: bool = True
 
     def __post_init__(self) -> None:
         if self.epochs < 1:
             raise ValueError(f"Stage {self.name!r} must run for at least one epoch")
         if self.validate_every < 1:
             raise ValueError(f"Stage {self.name!r} validate_every must be >= 1")
+        if self.save_every < 1:
+            raise ValueError(f"Stage {self.name!r} save_every must be >= 1")
         if isinstance(self.freeze, str):
             self.freeze = [self.freeze]
         if isinstance(self.unfreeze, str):

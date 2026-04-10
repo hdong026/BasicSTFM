@@ -15,6 +15,10 @@ class StagePlanTest(unittest.TestCase):
         )
         self.assertEqual(stage.epochs, 2)
         self.assertEqual(stage.losses, [{"type": "mse"}])
+        self.assertEqual(stage.save_every, 1)
+        self.assertTrue(stage.save_last)
+        self.assertTrue(stage.save_best)
+        self.assertTrue(stage.save_epoch_checkpoints)
 
     def test_plan_from_config(self):
         plan = StagePlan.from_config(
