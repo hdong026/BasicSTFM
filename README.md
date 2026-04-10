@@ -100,7 +100,7 @@ The following instructions assume that Conda is already available on your machin
 Why Python 3.10:
 
 - BasicSTFM declares `requires-python >= 3.9`.
-- The dependency list uses `torch>=2.1`, and Python 3.10 is a conservative, widely supported choice for PyTorch CPU and CUDA workflows.
+- The dependency list pins `torch==2.6.0`, and Python 3.10 is a conservative, widely supported choice for PyTorch CPU and CUDA workflows.
 - Python 3.10 avoids unnecessary compatibility issues that may appear with very new Python versions on research servers.
 
 ### Step 1: Create a Conda Environment
@@ -201,35 +201,36 @@ Editable mode is recommended for research development because changes under `src
 
 ### Step 5: PyTorch Notes
 
-The default `requirements.txt` includes:
+The default `requirements.txt` pins:
 
 ```text
-torch>=2.1
+torch==2.6.0
 ```
 
-This is suitable for CPU execution and many standard Linux environments.
+This pin is intentional. It avoids accidentally installing a newer PyTorch wheel that may require a newer NVIDIA driver than the one available on a research server.
 
-For CUDA training, install the PyTorch build that matches your CUDA driver before installing the remaining requirements. A typical workflow is:
-
-```bash
-python -m pip install --upgrade pip setuptools wheel
-# Install your CUDA-compatible PyTorch build here.
-pip install -r requirements.txt
-pip install -e .
-```
-
-Use the official PyTorch installation selector to choose the correct CUDA command for your machine.
-
-Check whether PyTorch can see CUDA:
+After installation, check whether PyTorch can see CUDA:
 
 ```bash
 python - <<'PY'
 import torch
 print("torch:", torch.__version__)
+print("torch cuda build:", torch.version.cuda)
 print("cuda_available:", torch.cuda.is_available())
+print("device_count:", torch.cuda.device_count())
 if torch.cuda.is_available():
     print("device:", torch.cuda.get_device_name(0))
 PY
+```
+
+If CUDA is still unavailable, your NVIDIA driver may be too old for the installed PyTorch wheel. In that case, update the driver or install a PyTorch wheel that matches your driver.
+
+To reinstall the pinned dependency set from scratch:
+
+```bash
+pip uninstall -y torch torchvision torchaudio
+pip install -r requirements.txt
+pip install -e .
 ```
 
 ### Step 6: Verify the Command Line Interface
@@ -1244,10 +1245,10 @@ Install dependencies:
 pip install -r requirements.txt
 ```
 
-If you need a CUDA-specific build, install the matching PyTorch wheel for your system, then rerun:
+Then reinstall the package:
 
 ```bash
-pip install -r requirements.txt
+pip install -e .
 ```
 
 ### `RuntimeError: No trainable parameters`
