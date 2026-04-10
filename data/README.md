@@ -23,10 +23,10 @@ Example:
 
 ```text
 data/
-  METR-LA/
+  MY_DATASET/
     raw/
-      metr-la.csv
-      adj.csv
+      measurements.h5
+      adjacency.pkl
     data.npz
     adj.npz
     README.md
@@ -106,6 +106,44 @@ python scripts/data/prepare_npz.py \
 
 Replace `T`, `N`, and `C` with concrete integers.
 
+If your data is an HDF5 file, inspect its keys first:
+
+```bash
+python scripts/data/prepare_npz.py \
+  --input data/<DATASET_NAME>/raw/<RAW_FILE>.h5 \
+  --list-keys
+```
+
+Then convert it:
+
+```bash
+python scripts/data/prepare_npz.py \
+  --input data/<DATASET_NAME>/raw/<RAW_FILE>.h5 \
+  --output data/<DATASET_NAME>/data.npz \
+  --key data \
+  --input-key <HDF5_KEY> \
+  --add-channel
+```
+
+If the HDF5 array is already `[T, N, C]`, omit `--add-channel`.
+
+If your adjacency file is a DCRNN/BasicTS-style pickle tuple such as:
+
+```text
+(sensor_ids, sensor_id_to_ind, adj_mx)
+```
+
+Convert it with:
+
+```bash
+python scripts/data/prepare_npz.py \
+  --input data/<DATASET_NAME>/raw/<ADJ_FILE>.pkl \
+  --output data/<DATASET_NAME>/adj.npz \
+  --key adj
+```
+
+For other tuple/list pickle files, pass `--pkl-index <INDEX>`.
+
 ## Using a Dataset in Config
 
 ```yaml
@@ -124,6 +162,64 @@ data:
 ```
 
 If no graph is available, remove `graph_path` and `graph_key`.
+
+## Generic Time-Series Plus Adjacency Example
+
+If your raw directory looks like:
+
+```text
+data/raw_data/<DATASET_NAME>/
+  <TIME_SERIES_FILE>.h5
+  <ADJACENCY_FILE>.pkl
+  optional_metadata.csv
+```
+
+Prepare the time series:
+
+```bash
+mkdir -p data/<DATASET_NAME>
+python scripts/data/prepare_npz.py \
+  --input data/raw_data/<DATASET_NAME>/<TIME_SERIES_FILE>.h5 \
+  --output data/<DATASET_NAME>/data.npz \
+  --key data \
+  --input-key <HDF5_KEY> \
+  --add-channel
+```
+
+Prepare the adjacency matrix:
+
+```bash
+python scripts/data/prepare_npz.py \
+  --input data/raw_data/<DATASET_NAME>/<ADJACENCY_FILE>.pkl \
+  --output data/<DATASET_NAME>/adj.npz \
+  --key adj
+```
+
+Inspect:
+
+```bash
+python scripts/data/inspect_npz.py data/<DATASET_NAME>/data.npz
+python scripts/data/inspect_npz.py data/<DATASET_NAME>/adj.npz
+```
+
+Expected shapes:
+
+```text
+data: shape=(T, N, C)
+adj: shape=(N, N)
+```
+
+Then run:
+
+```bash
+basicstfm train configs/examples/file_forecasting.yaml \
+  --cfg-options \
+  data.data_path=data/<DATASET_NAME>/data.npz \
+  data.graph_path=data/<DATASET_NAME>/adj.npz \
+  model.num_nodes=<N> \
+  model.input_dim=<C> \
+  model.output_dim=<C>
+```
 
 ## Scaling and Rescaling
 

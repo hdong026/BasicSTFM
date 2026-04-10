@@ -49,6 +49,7 @@ BasicSTFM/
       forecasting.yaml
       multistage_pretrain_finetune.yaml
       custom_components.yaml
+      file_forecasting.yaml
   examples/
     __init__.py
     custom_model.py
@@ -84,8 +85,9 @@ Important files:
 - `configs/examples/forecasting.yaml`: single-stage forecasting example.
 - `configs/examples/multistage_pretrain_finetune.yaml`: masked pretraining followed by forecasting fine-tuning.
 - `configs/examples/custom_components.yaml`: example using user-defined model and loss.
+- `configs/examples/file_forecasting.yaml`: generic file-backed forecasting template.
 - `data/README.md`: expected dataset layout and preprocessing guide.
-- `scripts/data/prepare_npz.py`: utility for converting simple raw arrays to canonical `.npz`.
+- `scripts/data/prepare_npz.py`: generic converter for `.h5`, `.pkl`, `.npy`, `.npz`, `.csv`, and `.txt`.
 - `scripts/data/inspect_npz.py`: utility for checking stored array keys and shapes.
 - `examples/custom_model.py`: custom model example.
 - `examples/custom_loss.py`: custom loss example.
@@ -437,10 +439,10 @@ Example:
 
 ```text
 data/
-  METR-LA/
+  MY_DATASET/
     raw/
-      metr_la.csv
-      adj.csv
+      measurements.h5
+      adjacency.pkl
     data.npz
     adj.npz
     README.md
@@ -526,6 +528,8 @@ Common cases:
 - Raw `[T, N]`: add a channel dimension and save as `[T, N, 1]`.
 - Raw `[T, N, C]`: save directly as `data.npz` with key `data`.
 - Raw CSV matrix `[T, N]`: convert with `--add-channel`.
+- Raw HDF5 file: inspect keys with `--list-keys`, then convert with `--input-key`.
+- Raw pickle adjacency tuple/list: use `--key adj`; DCRNN/BasicTS-style tuples default to index 2.
 - Raw flattened table: reshape explicitly with `--shape T N C`.
 - Raw timestamp/sensor table: pivot externally into `[T, N]` or `[T, N, C]`.
 - Raw edge list: convert externally into adjacency matrix `[N, N]`.
@@ -563,13 +567,55 @@ python scripts/data/prepare_npz.py \
 
 Replace `T`, `N`, and `C` with concrete integers.
 
-Convert an adjacency matrix:
+Inspect keys in an HDF5 file:
+
+```bash
+python scripts/data/prepare_npz.py \
+  --input data/<DATASET_NAME>/raw/<RAW_FILE>.h5 \
+  --list-keys
+```
+
+Convert an HDF5 time-series matrix `[T, N]` into `[T, N, 1]`:
+
+```bash
+python scripts/data/prepare_npz.py \
+  --input data/<DATASET_NAME>/raw/<RAW_FILE>.h5 \
+  --output data/<DATASET_NAME>/data.npz \
+  --key data \
+  --input-key <HDF5_KEY> \
+  --add-channel
+```
+
+If the HDF5 time-series is already `[T, N, C]`, omit `--add-channel`.
+
+Convert a numeric adjacency matrix:
 
 ```bash
 python scripts/data/prepare_npz.py \
   --input data/<DATASET_NAME>/raw/adj.csv \
   --output data/<DATASET_NAME>/adj.npz \
   --key adj
+```
+
+Convert a pickle adjacency matrix:
+
+```bash
+python scripts/data/prepare_npz.py \
+  --input data/<DATASET_NAME>/raw/adj.pkl \
+  --output data/<DATASET_NAME>/adj.npz \
+  --key adj
+```
+
+For DCRNN/BasicTS-style adjacency pickles shaped like:
+
+```text
+(sensor_ids, sensor_id_to_ind, adj_mx)
+```
+
+`--key adj` automatically selects `adj_mx`. For other tuple/list pickle files, pass:
+
+```bash
+--pkl-index <INDEX>
 ```
 
 Inspect the prepared files:
@@ -585,6 +631,103 @@ Expected output should show keys and shapes:
 data: shape=(T, N, C), dtype=float32, min=..., max=...
 adj: shape=(N, N), dtype=float32, min=..., max=...
 ```
+
+### Generic BasicTS/DCRNN-Style Workflow
+
+Many traffic datasets are distributed as a time-series file plus an adjacency file:
+
+```text
+data/
+  raw_data/
+    <DATASET_NAME>/
+      <TIME_SERIES_FILE>.h5
+      <ADJACENCY_FILE>.pkl
+      optional_metadata.csv
+```
+
+First inspect the HDF5 keys:
+
+```bash
+python scripts/data/prepare_npz.py \
+  --input data/raw_data/<DATASET_NAME>/<TIME_SERIES_FILE>.h5 \
+  --list-keys
+```
+
+Then convert the time series. If it is a `[T, N]` matrix, add the channel dimension:
+
+```bash
+mkdir -p data/<DATASET_NAME>
+python scripts/data/prepare_npz.py \
+  --input data/raw_data/<DATASET_NAME>/<TIME_SERIES_FILE>.h5 \
+  --output data/<DATASET_NAME>/data.npz \
+  --key data \
+  --input-key <HDF5_KEY> \
+  --add-channel
+```
+
+Convert the adjacency pickle:
+
+```bash
+python scripts/data/prepare_npz.py \
+  --input data/raw_data/<DATASET_NAME>/<ADJACENCY_FILE>.pkl \
+  --output data/<DATASET_NAME>/adj.npz \
+  --key adj
+```
+
+Check the result:
+
+```bash
+python scripts/data/inspect_npz.py data/<DATASET_NAME>/data.npz
+python scripts/data/inspect_npz.py data/<DATASET_NAME>/adj.npz
+```
+
+Expected output:
+
+```text
+data: shape=(T, N, C), dtype=float32, min=..., max=...
+adj: shape=(N, N), dtype=float32, min=..., max=...
+```
+
+Run a dry run with the generic file-backed config:
+
+```bash
+basicstfm dry-run configs/examples/file_forecasting.yaml \
+  --cfg-options \
+  data.data_path=data/<DATASET_NAME>/data.npz \
+  data.graph_path=data/<DATASET_NAME>/adj.npz \
+  model.num_nodes=<N> \
+  model.input_dim=<C> \
+  model.output_dim=<C>
+```
+
+Run a fast CPU smoke test:
+
+```bash
+basicstfm train configs/examples/file_forecasting.yaml \
+  --cfg-options \
+  trainer.device=cpu \
+  data.data_path=data/<DATASET_NAME>/data.npz \
+  data.graph_path=data/<DATASET_NAME>/adj.npz \
+  data.batch_size=8 \
+  model.num_nodes=<N> \
+  model.input_dim=<C> \
+  model.output_dim=<C> \
+  pipeline.stages.0.epochs=1
+```
+
+Run the normal forecasting example:
+
+```bash
+basicstfm train configs/examples/file_forecasting.yaml \
+  --cfg-options \
+  data.data_path=data/<DATASET_NAME>/data.npz \
+  data.graph_path=data/<DATASET_NAME>/adj.npz \
+  model.num_nodes=<N> \
+  model.input_dim=<C> \
+  model.output_dim=<C>
+```
+
+Replace `<DATASET_NAME>`, `<HDF5_KEY>`, `<N>`, and `<C>` with the values reported by `inspect_npz.py`.
 
 ## Data Interface
 

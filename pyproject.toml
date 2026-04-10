@@ -14,7 +14,10 @@ authors = [
 ]
 dependencies = [
   "numpy>=1.23",
+  "h5py>=3.8",
+  "pandas>=1.5",
   "PyYAML>=6.0",
+  "tables>=3.8",
   "torch>=2.1",
   "tqdm>=4.66"
 ]

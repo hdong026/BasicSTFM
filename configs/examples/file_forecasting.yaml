@@ -1,0 +1,60 @@
+experiment_name: file_forecasting
+seed: 42
+
+trainer:
+  type: MultiStageTrainer
+  device: auto
+  work_dir: runs/file_forecasting
+  log_every: 50
+
+data:
+  type: WindowDataModule
+  data_path: data/MY_DATASET/data.npz
+  input_key: data
+  graph_path: data/MY_DATASET/adj.npz
+  graph_key: adj
+  input_len: 12
+  target_len: 12
+  batch_size: 64
+  num_workers: 2
+  split: [0.7, 0.1, 0.2]
+  scaler:
+    type: standard
+
+model:
+  type: TinySTFoundationModel
+  num_nodes: 207
+  input_dim: 1
+  output_dim: 1
+  input_len: 12
+  output_len: 12
+  hidden_dim: 64
+  num_layers: 2
+  num_heads: 4
+  ffn_dim: 128
+  dropout: 0.1
+
+pipeline:
+  stages:
+    - name: forecasting
+      epochs: 5
+      task:
+        type: ForecastingTask
+      losses:
+        - type: mae
+          weight: 1.0
+        - type: mse
+          weight: 0.05
+      metrics:
+        - type: mae
+        - type: rmse
+      optimizer:
+        type: AdamW
+        lr: 0.001
+        weight_decay: 0.0001
+      scheduler:
+        type: CosineAnnealingLR
+        T_max: 5
+      validate_every: 1
+      save_best_by: val/loss/total
+      gradient_clip_val: 5.0
