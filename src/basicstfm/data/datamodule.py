@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset, Subset
 from torch.utils.data._utils.collate import default_collate
 
 from basicstfm.data.scaler import build_scaler
@@ -66,6 +66,10 @@ class WindowDataModule:
         shuffle_train: bool = True,
         pin_memory: bool = False,
         drop_last: bool = False,
+        train_fraction: Optional[float] = None,
+        train_windows: Optional[int] = None,
+        few_shot_ratio: Optional[float] = None,
+        few_shot_windows: Optional[int] = None,
     ) -> None:
         if output_len is not None:
             target_len = output_len
@@ -85,9 +89,11 @@ class WindowDataModule:
         self.shuffle_train = shuffle_train
         self.pin_memory = pin_memory
         self.drop_last = drop_last
+        self.train_fraction = train_fraction if train_fraction is not None else few_shot_ratio
+        self.train_windows = train_windows if train_windows is not None else few_shot_windows
         self.scaler = build_scaler(self.scaler_cfg)
         self.graph: Optional[torch.Tensor] = None
-        self.datasets: Dict[str, WindowDataset] = {}
+        self.datasets: Dict[str, Dataset] = {}
         self.data_shape: Optional[Tuple[int, int, int]] = None
 
     def setup(self) -> None:
@@ -105,8 +111,9 @@ class WindowDataModule:
 
         self.scaler.fit(train_raw)
 
+        train_dataset = WindowDataset(train_raw, self.input_len, self.target_len, self.stride)
         self.datasets = {
-            "train": WindowDataset(train_raw, self.input_len, self.target_len, self.stride),
+            "train": self._limit_train_dataset(train_dataset),
             "val": WindowDataset(val_raw, self.input_len, self.target_len, self.stride),
             "test": WindowDataset(test_raw, self.input_len, self.target_len, self.stride),
         }
@@ -115,8 +122,19 @@ class WindowDataModule:
             graph = _load_numpy(self.graph_path, self.graph_key)
             self.graph = torch.as_tensor(graph, dtype=torch.float32)
 
-    def train_dataloader(self) -> DataLoader:
-        return self._loader("train", shuffle=self.shuffle_train)
+    def train_dataloader(
+        self,
+        train_fraction: Optional[float] = None,
+        train_windows: Optional[int] = None,
+        few_shot_ratio: Optional[float] = None,
+        few_shot_windows: Optional[int] = None,
+    ) -> DataLoader:
+        dataset = self._limit_dataset(
+            self.datasets["train"],
+            fraction=train_fraction if train_fraction is not None else few_shot_ratio,
+            windows=train_windows if train_windows is not None else few_shot_windows,
+        )
+        return self._make_loader(dataset, shuffle=self.shuffle_train, drop_last=self.drop_last)
 
     def val_dataloader(self) -> DataLoader:
         return self._loader("val", shuffle=False)
@@ -125,13 +143,20 @@ class WindowDataModule:
         return self._loader("test", shuffle=False)
 
     def _loader(self, split: str, shuffle: bool) -> DataLoader:
-        return DataLoader(
+        return self._make_loader(
             self.datasets[split],
+            shuffle=shuffle,
+            drop_last=self.drop_last if split == "train" else False,
+        )
+
+    def _make_loader(self, dataset: Dataset, shuffle: bool, drop_last: bool) -> DataLoader:
+        return DataLoader(
+            dataset,
             batch_size=self.batch_size,
             shuffle=shuffle,
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
-            drop_last=self.drop_last if split == "train" else False,
+            drop_last=drop_last,
             collate_fn=self._collate,
         )
 
@@ -140,6 +165,35 @@ class WindowDataModule:
         if self.graph is not None:
             batch["graph"] = self.graph
         return batch
+
+    def _limit_train_dataset(self, dataset: Dataset) -> Dataset:
+        return self._limit_dataset(
+            dataset,
+            fraction=self.train_fraction,
+            windows=self.train_windows,
+        )
+
+    @staticmethod
+    def _limit_dataset(
+        dataset: Dataset,
+        fraction: Optional[float] = None,
+        windows: Optional[int] = None,
+    ) -> Dataset:
+        length = len(dataset)
+        limit = length
+        if fraction is not None:
+            fraction = float(fraction)
+            if not 0.0 < fraction <= 1.0:
+                raise ValueError("train_fraction/few_shot_ratio must be in (0, 1]")
+            limit = min(limit, max(1, int(length * fraction)))
+        if windows is not None:
+            windows = int(windows)
+            if windows <= 0:
+                raise ValueError("train_windows/few_shot_windows must be positive")
+            limit = min(limit, windows)
+        if limit == length:
+            return dataset
+        return Subset(dataset, list(range(limit)))
 
     def get_scaler(self) -> object:
         return self.scaler
@@ -177,6 +231,10 @@ class SyntheticDataModule(WindowDataModule):
         shuffle_train: bool = True,
         pin_memory: bool = False,
         drop_last: bool = False,
+        train_fraction: Optional[float] = None,
+        train_windows: Optional[int] = None,
+        few_shot_ratio: Optional[float] = None,
+        few_shot_windows: Optional[int] = None,
         seed: int = 42,
         noise_std: float = 0.05,
     ) -> None:
@@ -201,6 +259,10 @@ class SyntheticDataModule(WindowDataModule):
             shuffle_train=shuffle_train,
             pin_memory=pin_memory,
             drop_last=drop_last,
+            train_fraction=train_fraction,
+            train_windows=train_windows,
+            few_shot_ratio=few_shot_ratio,
+            few_shot_windows=few_shot_windows,
         )
 
     def setup(self) -> None:
@@ -211,7 +273,11 @@ class SyntheticDataModule(WindowDataModule):
         daily = np.sin(2 * np.pi * t / 24.0 + node_phase)
         weekly = np.cos(2 * np.pi * t / (24.0 * 7.0) + node_phase / 2.0)
         trend = 0.001 * t * channel_scale
-        noise = rng.normal(0.0, self.noise_std, size=(self.num_timesteps, self.num_nodes, self.num_channels))
+        noise = rng.normal(
+            0.0,
+            self.noise_std,
+            size=(self.num_timesteps, self.num_nodes, self.num_channels),
+        )
         array = (daily + 0.5 * weekly + trend + noise).astype(np.float32)
         self.data_shape = tuple(int(x) for x in array.shape)
 
@@ -225,10 +291,11 @@ class SyntheticDataModule(WindowDataModule):
         test_raw = array[train_len + val_len : train_len + val_len + test_len]
 
         self.scaler.fit(train_raw)
+        train_dataset = WindowDataset(
+            train_raw, self.input_len, self.target_len, self.stride
+        )
         self.datasets = {
-            "train": WindowDataset(
-                train_raw, self.input_len, self.target_len, self.stride
-            ),
+            "train": self._limit_train_dataset(train_dataset),
             "val": WindowDataset(
                 val_raw, self.input_len, self.target_len, self.stride
             ),

@@ -86,15 +86,25 @@ class MultiStageTrainer:
         if self.model is None or self.datamodule is None:
             raise RuntimeError("Trainer.setup must run before run_stage")
 
-        self.logger.info("Starting stage %s for %d epoch(s)", stage.name, stage.epochs)
+        suffix = " [eval-only]" if stage.eval_only else ""
+        self.logger.info(
+            "Starting stage %s for %d epoch(s)%s",
+            stage.name,
+            stage.epochs,
+            suffix,
+        )
         self._apply_trainability(stage)
         task = TASKS.build(stage.task)
         if hasattr(task, "set_scaler") and hasattr(self.datamodule, "get_scaler"):
             task.set_scaler(self.datamodule.get_scaler())
         losses = LossCollection(stage.losses).to(self.device)
         metrics = MetricCollection(stage.metrics).to(self.device)
-        optimizer = build_optimizer(stage.optimizer, self.model.parameters())
-        scheduler = build_scheduler(stage.scheduler, optimizer)
+        optimizer = (
+            None
+            if stage.eval_only
+            else build_optimizer(stage.optimizer, self.model.parameters())
+        )
+        scheduler = None if optimizer is None else build_scheduler(stage.scheduler, optimizer)
         start_epoch = 1
         best_score = float("inf")
         resumed_this_stage = False
@@ -139,6 +149,40 @@ class MultiStageTrainer:
                 info["unexpected_keys"],
             )
 
+        if stage.eval_only:
+            val_logs = self._run_loader(
+                loader=self.datamodule.val_dataloader(),
+                task=task,
+                losses=losses,
+                metrics=metrics,
+                optimizer=None,
+                train=False,
+                gradient_clip_val=None,
+                prefix="val",
+            )
+            if val_logs:
+                self.logger.info(
+                    "Eval-only stage %s validation: %s",
+                    stage.name,
+                    self._format_logs(val_logs),
+                )
+            test_logs = self._run_loader(
+                loader=self.datamodule.test_dataloader(),
+                task=task,
+                losses=losses,
+                metrics=metrics,
+                optimizer=None,
+                train=False,
+                gradient_clip_val=None,
+                prefix="test",
+            )
+            self.logger.info(
+                "Finished eval-only stage %s: %s",
+                stage.name,
+                self._format_logs(test_logs),
+            )
+            return
+
         if start_epoch > stage.epochs:
             self.logger.info(
                 "Stage %s already reached epoch %d; no remaining epochs to run",
@@ -150,7 +194,7 @@ class MultiStageTrainer:
         for epoch in range(start_epoch, stage.epochs + 1):
             score_for_scheduler: Optional[float] = None
             train_logs = self._run_loader(
-                loader=self.datamodule.train_dataloader(),
+                loader=self._train_dataloader_for_stage(stage),
                 task=task,
                 losses=losses,
                 metrics=metrics,
@@ -171,7 +215,12 @@ class MultiStageTrainer:
                     gradient_clip_val=None,
                 )
                 log_payload.update(val_logs)
-                score = float(val_logs.get(stage.save_best_by, val_logs.get("val/loss/total", best_score)))
+                score = float(
+                    val_logs.get(
+                        stage.save_best_by,
+                        val_logs.get("val/loss/total", best_score),
+                    )
+                )
                 score_for_scheduler = score
                 if score < best_score:
                     best_score = score
@@ -313,17 +362,37 @@ class MultiStageTrainer:
             if metrics.items and "pred" in output and "target" in output:
                 logs.update(metrics(output["pred"], output["target"], mask=output.get("mask")))
             for key, value in logs.items():
-                scalar = float(value.detach().cpu().item() if isinstance(value, torch.Tensor) else value)
+                scalar = float(
+                    value.detach().cpu().item()
+                    if isinstance(value, torch.Tensor)
+                    else value
+                )
                 sums[f"{prefix}/{key}"] = sums.get(f"{prefix}/{key}", 0.0) + scalar
             count += 1
 
             if train and self.log_every > 0 and batch_idx % self.log_every == 0:
                 interim = {k: v / max(count, 1) for k, v in sums.items()}
-                self.logger.info("%s batch %d: %s", prefix, batch_idx, self._format_logs(interim))
+                self.logger.info(
+                    "%s batch %d: %s",
+                    prefix,
+                    batch_idx,
+                    self._format_logs(interim),
+                )
 
         if count == 0:
             return {}
         return {key: value / count for key, value in sums.items()}
+
+    def _train_dataloader_for_stage(self, stage: StageSpec):
+        kwargs = {
+            "train_fraction": stage.train_fraction,
+            "train_windows": stage.train_windows,
+            "few_shot_ratio": stage.few_shot_ratio,
+            "few_shot_windows": stage.few_shot_windows,
+        }
+        if all(value is None for value in kwargs.values()):
+            return self.datamodule.train_dataloader()
+        return self.datamodule.train_dataloader(**kwargs)
 
     def _apply_trainability(self, stage: StageSpec) -> None:
         if self.model is None:
@@ -342,7 +411,9 @@ class MultiStageTrainer:
     def _resolve_checkpoint_reference(self, reference: str) -> str:
         if reference == "previous":
             if not self.last_checkpoint:
-                raise RuntimeError("stage.load_from='previous' requested before any checkpoint exists")
+                raise RuntimeError(
+                    "stage.load_from='previous' requested before any checkpoint exists"
+                )
             return self.last_checkpoint
         return reference
 
@@ -412,7 +483,7 @@ class MultiStageTrainer:
         stage_index: int,
         epoch: int,
         model: torch.nn.Module,
-        optimizer: torch.optim.Optimizer,
+        optimizer: Optional[torch.optim.Optimizer],
         scheduler: Optional[Any],
         score: Optional[float],
         best_score: float,

@@ -11,6 +11,8 @@ BUILTIN_MODULES = (
     "basicstfm.metrics.common",
     "basicstfm.models.mlp_forecaster",
     "basicstfm.models.st_foundation",
+    "basicstfm.models.foundation",
+    "basicstfm.tasks.contrastive",
     "basicstfm.tasks.forecasting",
     "basicstfm.tasks.masked_reconstruction",
     "basicstfm.engines.trainer",

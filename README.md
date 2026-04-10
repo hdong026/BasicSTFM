@@ -13,6 +13,8 @@ The framework follows the configuration-centric philosophy of [BasicTS](https://
 - Custom model, loss, metric, and task injection through `custom_imports`.
 - Built-in synthetic data for immediate smoke testing without external datasets.
 - Built-in `TinySTFoundationModel` and `MLPForecaster` baselines.
+- Built-in OpenCity-, FactoST-, and UniST-style STFM adapters.
+- Zero-shot evaluation stages and stage-level few-shot training subsets.
 - BasicTS-style scale/rescale flow: scale model inputs and compute losses/metrics after inverse transformation.
 - Conda-first setup with `requirements.txt` and editable installation.
 
@@ -50,6 +52,10 @@ BasicSTFM/
       multistage_pretrain_finetune.yaml
       custom_components.yaml
       file_forecasting.yaml
+    foundation/
+      opencity_pretrain_zero_fewshot.yaml
+      factost_pretrain_zero_fewshot.yaml
+      unist_pretrain_zero_fewshot.yaml
   examples/
     __init__.py
     custom_model.py
@@ -87,6 +93,9 @@ Important files:
 - `configs/examples/multistage_pretrain_finetune.yaml`: masked pretraining followed by forecasting fine-tuning.
 - `configs/examples/custom_components.yaml`: example using user-defined model and loss.
 - `configs/examples/file_forecasting.yaml`: generic file-backed forecasting template.
+- `configs/foundation/opencity_pretrain_zero_fewshot.yaml`: OpenCity-style graph-temporal transfer pipeline.
+- `configs/foundation/factost_pretrain_zero_fewshot.yaml`: FactoST-style universal temporal pretraining and factorized adapter pipeline.
+- `configs/foundation/unist_pretrain_zero_fewshot.yaml`: UniST-style masked pretraining and prompt-tuning pipeline.
 - `data/README.md`: expected dataset layout and preprocessing guide.
 - `scripts/data/prepare_npz.py`: generic converter for `.h5`, `.pkl`, `.npy`, `.npz`, `.csv`, and `.txt`.
 - `scripts/data/prepare_all.py`: one-command batch converter for `data/raw_data/*`.
@@ -94,6 +103,74 @@ Important files:
 - `examples/custom_model.py`: custom model example.
 - `examples/custom_loss.py`: custom loss example.
 - `examples/custom_task.py`: custom task example.
+
+## Foundation Model Families
+
+BasicSTFM now provides three built-in STFM model families through the same model
+registry:
+
+| Model type | Upstream reference | BasicSTFM training pattern |
+| --- | --- | --- |
+| `OpenCityFoundationModel` | `HKUDS/OpenCity` | Graph-temporal supervised pretraining, zero-shot evaluation, few-shot fine-tuning |
+| `FactoSTFoundationModel` | `CityMind-Lab/FactoST` | Universal temporal masked pretraining, zero-shot temporal inference, factorized ST adapter fine-tuning |
+| `UniSTFoundationModel` | `tsinghua-fib-lab/UniST` | Masked spatio-temporal pretraining, zero-shot evaluation, prompt-tuning on few-shot data |
+
+The training flow is shared. A stage can train, evaluate only, freeze/unfreeze
+parameter groups, or use a limited training subset:
+
+```yaml
+- name: zero_shot_test
+  eval_only: true
+  epochs: 0
+  load_from: previous
+  task:
+    type: ForecastingTask
+    model_mode: zero_shot
+
+- name: five_percent_few_shot_finetune
+  epochs: 3
+  load_from: previous
+  few_shot_ratio: 0.05
+  task:
+    type: ForecastingTask
+```
+
+For prompt or adapter tuning, use the existing stage-level trainability rules:
+
+```yaml
+freeze:
+  - all
+unfreeze:
+  - prompt.*
+  - forecast_head.*
+```
+
+Run the provided transfer templates after preparing a dataset:
+
+```bash
+basicstfm train configs/foundation/opencity_pretrain_zero_fewshot.yaml
+basicstfm train configs/foundation/factost_pretrain_zero_fewshot.yaml
+basicstfm train configs/foundation/unist_pretrain_zero_fewshot.yaml
+```
+
+For METR-LA with a different horizon, override the data lengths at launch:
+
+```bash
+basicstfm train configs/foundation/unist_pretrain_zero_fewshot.yaml \
+  --cfg-options \
+  data.data_path=data/METR-LA/data.npz \
+  data.graph_path=data/METR-LA/adj.npz \
+  data.input_len=12 \
+  data.output_len=12 \
+  model.input_len=auto \
+  model.output_len=auto
+```
+
+Third-party provenance is documented in `src/basicstfm/third_party/NOTICE.md`.
+OpenCity reference code is vendored under its MIT license. FactoST and UniST did
+not include a LICENSE file in the inspected public checkouts, so BasicSTFM ships
+framework-native adapters rather than substantial vendored copies of those
+repositories.
 
 ## Installation From GitHub
 

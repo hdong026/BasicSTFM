@@ -26,10 +26,17 @@ class StageSpec:
     save_best: bool = True
     save_last: bool = True
     save_epoch_checkpoints: bool = True
+    eval_only: bool = False
+    train_fraction: Optional[float] = None
+    train_windows: Optional[int] = None
+    few_shot_ratio: Optional[float] = None
+    few_shot_windows: Optional[int] = None
 
     def __post_init__(self) -> None:
-        if self.epochs < 1:
+        if self.epochs < 1 and not self.eval_only:
             raise ValueError(f"Stage {self.name!r} must run for at least one epoch")
+        if self.epochs < 0:
+            raise ValueError(f"Stage {self.name!r} epochs must be >= 0")
         if self.validate_every < 1:
             raise ValueError(f"Stage {self.name!r} validate_every must be >= 1")
         if self.save_every < 1:
@@ -84,6 +91,17 @@ class StagePlan:
                 "load_from": stage.load_from,
                 "freeze": stage.freeze,
                 "unfreeze": stage.unfreeze,
+                "eval_only": stage.eval_only,
+                "train_fraction": (
+                    stage.train_fraction
+                    if stage.train_fraction is not None
+                    else stage.few_shot_ratio
+                ),
+                "train_windows": (
+                    stage.train_windows
+                    if stage.train_windows is not None
+                    else stage.few_shot_windows
+                ),
             }
             for stage in self.stages
         ]
