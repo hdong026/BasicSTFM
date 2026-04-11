@@ -10,6 +10,8 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
+from basicstfm.utils.checkpoint import torch_load
+
 
 def ensure_4d(x: torch.Tensor) -> torch.Tensor:
     """Return data as [B, T, N, C]."""
@@ -180,7 +182,7 @@ def load_weights(
     ckpt_path = Path(path)
     if not ckpt_path.exists():
         raise FileNotFoundError(ckpt_path)
-    state = torch.load(str(ckpt_path), map_location=map_location)
+    state = torch_load(str(ckpt_path), map_location=map_location)
     if key:
         state = state[key]
     elif isinstance(state, dict):
@@ -223,7 +225,7 @@ def _read_state_dict(
     ckpt_path = Path(path)
     if not ckpt_path.exists():
         raise FileNotFoundError(ckpt_path)
-    state = torch.load(str(ckpt_path), map_location=map_location)
+    state = torch_load(str(ckpt_path), map_location=map_location)
     if key:
         state = state[key]
     elif isinstance(state, dict):

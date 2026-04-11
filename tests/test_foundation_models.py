@@ -13,6 +13,7 @@ import torch
 
 from basicstfm.builders import import_builtin_components
 from basicstfm.registry import MODELS
+from basicstfm.utils.checkpoint import save_checkpoint
 
 
 class FoundationModelShapeTest(unittest.TestCase):
@@ -145,8 +146,8 @@ class FoundationModelShapeTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             factost_path = Path(tmpdir) / "factost.pt"
             unist_path = Path(tmpdir) / "unist.pt"
-            torch.save({"model": factost_pretrain.state_dict()}, factost_path)
-            torch.save({"model": unist_pretrain.state_dict()}, unist_path)
+            save_checkpoint(str(factost_path), factost_pretrain, extra={"stage": "utp"})
+            save_checkpoint(str(unist_path), unist_pretrain, extra={"stage": "pretrain"})
 
             factost_missing, factost_unexpected = factost_adapter.load_backbone_weights(
                 str(factost_path),
