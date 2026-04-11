@@ -118,6 +118,7 @@ class MultiStageTrainer:
                 scheduler=scheduler,
                 strict=self.resume_strict,
                 map_location=str(self.device),
+                restore_rng=True,
             )
             extra = info.get("extra", {})
             start_epoch = int(extra.get("epoch", 0)) + 1

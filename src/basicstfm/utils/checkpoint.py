@@ -37,6 +37,7 @@ def load_checkpoint(
     scheduler: Optional[Any] = None,
     strict: bool = True,
     map_location: str = "cpu",
+    restore_rng: bool = False,
 ) -> Dict[str, Any]:
     ckpt = torch_load(path, map_location=map_location)
     state_dict = ckpt.get("model", ckpt)
@@ -45,7 +46,7 @@ def load_checkpoint(
         optimizer.load_state_dict(ckpt["optimizer"])
     if scheduler is not None and "scheduler" in ckpt:
         scheduler.load_state_dict(ckpt["scheduler"])
-    if "rng_state" in ckpt:
+    if restore_rng and "rng_state" in ckpt:
         restore_rng_state(ckpt["rng_state"])
     return {
         "missing_keys": list(missing),
@@ -80,9 +81,17 @@ def restore_rng_state(state: Dict[str, Any]) -> None:
     if "numpy" in state:
         np.random.set_state(state["numpy"])
     if "torch" in state:
-        torch.set_rng_state(state["torch"])
+        torch.set_rng_state(_to_byte_tensor(state["torch"]))
     if "torch_cuda" in state and torch.cuda.is_available():
-        torch.cuda.set_rng_state_all(state["torch_cuda"])
+        torch.cuda.set_rng_state_all([_to_byte_tensor(item) for item in state["torch_cuda"]])
+
+
+def _to_byte_tensor(value: Any) -> torch.ByteTensor:
+    if isinstance(value, torch.Tensor):
+        return value.detach().to(device="cpu", dtype=torch.uint8)
+    if isinstance(value, np.ndarray):
+        return torch.as_tensor(value, dtype=torch.uint8, device="cpu")
+    return torch.tensor(value, dtype=torch.uint8, device="cpu")
 
 
 def torch_load(path: str, map_location: str = "cpu") -> Any:
