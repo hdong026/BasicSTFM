@@ -187,6 +187,31 @@ class MultiDatasetDataModuleTest(unittest.TestCase):
                     torch.utils.data.distributed.DistributedSampler,
                 )
 
+    def test_mismatched_graph_shape_fails_during_setup(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            ds = root / "Mismatch"
+            ds.mkdir()
+
+            np.savez(ds / "data.npz", data=np.random.randn(48, 5, 1).astype(np.float32))
+            np.savez(ds / "adj.npz", adj=np.eye(3, dtype=np.float32))
+
+            datamodule = MultiDatasetWindowDataModule(
+                datasets=[
+                    {
+                        "name": "Mismatch",
+                        "data_path": str(ds / "data.npz"),
+                        "graph_path": str(ds / "adj.npz"),
+                    }
+                ],
+                input_len=4,
+                output_len=2,
+                batch_size=2,
+                split=(0.6, 0.2, 0.2),
+            )
+            with self.assertRaisesRegex(ValueError, "does not match data node count"):
+                datamodule.setup()
+
 
 if __name__ == "__main__":
     unittest.main()

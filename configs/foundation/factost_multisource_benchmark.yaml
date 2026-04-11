@@ -31,17 +31,14 @@ dataset_registry:
   Rainfall_AUS:
     name: Rainfall_AUS
     data_path: data/Rainfall_AUS/data.npz
-    graph_path: data/Rainfall_AUS/adj.npz
     batch_size: 12
   Rainfall_CN:
     name: Rainfall_CN
     data_path: data/Rainfall_CN/data.npz
-    graph_path: data/Rainfall_CN/adj.npz
     batch_size: 12
   Rainfall_SA:
     name: Rainfall_SA
     data_path: data/Rainfall_SA/data.npz
-    graph_path: data/Rainfall_SA/adj.npz
     batch_size: 12
   PEMS08:
     name: PEMS08
@@ -51,12 +48,10 @@ dataset_registry:
   Rainfall_UK:
     name: Rainfall_UK
     data_path: data/Rainfall_UK/data.npz
-    graph_path: data/Rainfall_UK/adj.npz
     batch_size: 12
   Rainfall_USA:
     name: Rainfall_USA
     data_path: data/Rainfall_USA/data.npz
-    graph_path: data/Rainfall_USA/adj.npz
     batch_size: 12
 
 dataset_groups:

@@ -212,6 +212,11 @@ class WindowDataModule:
 
         if self.graph_path:
             graph = _load_numpy(self.graph_path, self.graph_key)
+            if graph.ndim != 2 or graph.shape[0] != array.shape[1] or graph.shape[1] != array.shape[1]:
+                raise ValueError(
+                    f"Graph shape {tuple(graph.shape)} does not match data node count "
+                    f"{array.shape[1]} for dataset {self.data_path}"
+                )
             self.graph = torch.as_tensor(graph, dtype=torch.float32)
 
     def train_dataloader(
@@ -494,6 +499,15 @@ class MultiDatasetWindowDataModule:
             graph = None
             if cfg["graph_path"]:
                 loaded_graph = _load_numpy(cfg["graph_path"], cfg["graph_key"])
+                if (
+                    loaded_graph.ndim != 2
+                    or loaded_graph.shape[0] != array.shape[1]
+                    or loaded_graph.shape[1] != array.shape[1]
+                ):
+                    raise ValueError(
+                        f"Graph shape {tuple(loaded_graph.shape)} does not match data node count "
+                        f"{array.shape[1]} for dataset {name}"
+                    )
                 graph = torch.as_tensor(loaded_graph, dtype=torch.float32)
             self.graphs[name] = graph
             self.dataset_metadata[name] = {
