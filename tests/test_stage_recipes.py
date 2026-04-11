@@ -151,6 +151,51 @@ class StageRecipeCompilationTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "reset_data"):
             MultiStageTrainer(cfg, dry_run=True)
 
+    def test_reset_data_with_new_type_drops_incompatible_base_keys(self):
+        cfg = {
+            "data": {
+                "type": "WindowDataModule",
+                "data_path": "data/METR-LA/data.npz",
+                "graph_path": "data/METR-LA/adj.npz",
+                "input_len": 12,
+                "output_len": 6,
+                "batch_size": 16,
+            },
+            "model": {
+                "type": "TinySTFoundationModel",
+                "num_nodes": 8,
+                "input_dim": 1,
+                "output_dim": 1,
+                "input_len": 12,
+                "output_len": 6,
+            },
+            "pipeline": {
+                "stages": [
+                    {
+                        "name": "joint_pretrain",
+                        "task": {"type": "MaskedReconstructionTask"},
+                        "reset_data": True,
+                        "data": {
+                            "type": "MultiDatasetWindowDataModule",
+                            "input_len": 12,
+                            "output_len": 6,
+                            "datasets": [
+                                {"name": "A", "data_path": "data/A/data.npz"},
+                                {"name": "B", "data_path": "data/B/data.npz"},
+                            ],
+                        },
+                    }
+                ]
+            },
+        }
+        trainer = MultiStageTrainer(cfg, dry_run=True)
+
+        recipe = trainer._stage_data_recipes[0]
+        self.assertEqual(recipe["type"], "MultiDatasetWindowDataModule")
+        self.assertNotIn("data_path", recipe)
+        self.assertNotIn("graph_path", recipe)
+        self.assertIn("datasets", recipe)
+
 
 if __name__ == "__main__":
     unittest.main()

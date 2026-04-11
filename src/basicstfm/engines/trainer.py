@@ -522,7 +522,12 @@ class MultiStageTrainer:
             override = getattr(stage, attr_name)
             reset_requested = bool(getattr(stage, reset_attr))
             if reset_requested:
-                current = deepcopy(base_cfg)
+                override_type = None if not isinstance(override, dict) else override.get("type")
+                base_type = base_cfg.get("type")
+                if override_type is not None and override_type != base_type:
+                    current = {"type": override_type}
+                else:
+                    current = deepcopy(base_cfg)
             elif recipes:
                 current = deepcopy(recipes[-1])
             else:
