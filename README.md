@@ -154,6 +154,12 @@ basicstfm dry-run configs/examples/multi_dataset_pretrain_transfer.yaml
 This example uses `MultiDatasetWindowDataModule` for the pretraining stage and
 switches back to `WindowDataModule` for downstream target-domain evaluation.
 
+For a ready-to-run UniST version of the same idea:
+
+```bash
+basicstfm dry-run configs/foundation/unist_multi_dataset_pretrain_transfer.yaml
+```
+
 ### 5. Resume
 
 ```bash
@@ -177,6 +183,7 @@ basicstfm train configs/foundation/unist_pretrain_zero_fewshot.yaml \
 | `configs/foundation/opencity_pretrain_zero_fewshot.yaml` | OpenCity-style pretraining, zero-shot testing, and efficient head tuning |
 | `configs/foundation/factost_pretrain_zero_fewshot.yaml` | FactoST-style UTP followed by factorized spatio-temporal adaptation |
 | `configs/foundation/unist_pretrain_zero_fewshot.yaml` | UniST-style masked pretraining followed by prompt-based transfer |
+| `configs/foundation/unist_multi_dataset_pretrain_transfer.yaml` | UniST-style joint multi-dataset pretraining, then target-domain zero-shot and prompt tuning |
 
 Current built-in alignment:
 
