@@ -8,6 +8,7 @@ The core abstraction is a **stage pipeline**. A recipe is defined as an ordered 
 
 - Config-driven experiments with YAML.
 - Stage-centric training pipelines for pretraining, zero-shot evaluation, few-shot tuning, and multi-stage transfer.
+- Joint multi-dataset pretraining through a configurable multi-loader data interface.
 - Built-in OpenCity-, FactoST-, and UniST-style model families.
 - Custom models, tasks, and losses through `custom_imports`.
 - Generic data preparation scripts for `.h5`, `.npz`, `.npy`, `.pkl`, and `.csv`.
@@ -46,6 +47,7 @@ Main entry points:
 - `configs/foundation/`: built-in STFM recipes.
 - `configs/templates/stage_pipeline_template.yaml`: generic starting point for new stage pipelines.
 - `configs/examples/custom_stage_recipe.yaml`: end-to-end custom multi-stage example.
+- `configs/examples/multi_dataset_pretrain_transfer.yaml`: joint pretraining over multiple datasets, then target-domain transfer.
 - `data/README.md`: dataset layout and preprocessing guide.
 - `docs/stage_recipe_guide.md`: how to build your own protocol on top of the framework.
 
@@ -143,7 +145,16 @@ basicstfm train configs/foundation/unist_pretrain_zero_fewshot.yaml \
   model.output_len=auto
 ```
 
-### 4. Resume
+### 4. Inspect a multi-dataset pretraining recipe
+
+```bash
+basicstfm dry-run configs/examples/multi_dataset_pretrain_transfer.yaml
+```
+
+This example uses `MultiDatasetWindowDataModule` for the pretraining stage and
+switches back to `WindowDataModule` for downstream target-domain evaluation.
+
+### 5. Resume
 
 ```bash
 basicstfm train configs/foundation/unist_pretrain_zero_fewshot.yaml \
@@ -175,6 +186,10 @@ Current built-in alignment:
 
 These recipes are designed to be **stage-faithful abstractions**, not literal line-by-line copies of the original training codebases.
 
+The original OpenCity, FactoST, and UniST papers all rely on multi-dataset
+joint pretraining. In BasicSTFM, that pattern is expressed through a
+stage-level `data` override that uses `MultiDatasetWindowDataModule`.
+
 ## Stage Pipeline Abstraction
 
 Each stage can define:
@@ -189,6 +204,17 @@ Each stage can define:
 - `eval_only`
 - `few_shot_ratio` / `few_shot_windows`
 - `reset_model` / `reset_data`
+
+For data, BasicSTFM supports both:
+
+- `WindowDataModule` for a single target dataset;
+- `MultiDatasetWindowDataModule` for joint pretraining over multiple datasets.
+
+The multi-dataset module exposes:
+
+- `datasets`: list of dataset entries (`name`, `data_path`, `graph_path`, and optional overrides);
+- `train_strategy`: `round_robin`, `proportional`, `uniform`, or `sequential`;
+- `eval_strategy`: `per_dataset` or `combined`.
 
 Minimal example:
 

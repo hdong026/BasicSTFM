@@ -74,6 +74,13 @@ model:
 If a field is set to `auto`, the trainer resolves it from the active datamodule
 metadata for that stage.
 
+For joint pretraining across multiple datasets, use `MultiDatasetWindowDataModule`
+as a stage-level data override. It exposes:
+
+- `datasets`: list of dataset entries;
+- `train_strategy`: how training batches are mixed across datasets;
+- `eval_strategy`: whether validation/test stay per-dataset or are combined.
+
 ## 3. Express the Protocol as Stages
 
 Every experiment must define `pipeline.stages`.
@@ -146,6 +153,38 @@ You can also change stage-level dataloader behavior:
   data:
     batch_size: 64
 ```
+
+Multi-dataset joint pretraining looks like this:
+
+```yaml
+- name: multi_dataset_pretrain
+  reset_data: true
+  data:
+    type: MultiDatasetWindowDataModule
+    input_len: 12
+    output_len: 12
+    batch_size: 16
+    train_strategy: round_robin
+    eval_strategy: per_dataset
+    datasets:
+      - name: METR-LA
+        data_path: data/METR-LA/data.npz
+        graph_path: data/METR-LA/adj.npz
+      - name: PEMS-BAY
+        data_path: data/PEMS-BAY/data.npz
+        graph_path: data/PEMS-BAY/adj.npz
+  task:
+    type: MaskedReconstructionTask
+```
+
+That pattern is the framework-native way to express the multi-dataset
+pretraining regimes used by OpenCity, FactoST, and UniST.
+
+In practice, the built-in strategies map to the original codebases like this:
+
+- **OpenCity**: concatenated multi-dataset pretraining, closest to `combined` evaluation and a simple interleaved train loader;
+- **FactoST**: concatenated datasets with batch scheduling, closest to `train_strategy: round_robin`;
+- **UniST**: dataset-specific loaders whose batches are shuffled together, closest to `train_strategy: uniform`.
 
 ## 5. Reset Inheritance When Switching Families
 
@@ -234,6 +273,7 @@ Good starting points:
 
 - `configs/templates/stage_pipeline_template.yaml`
 - `configs/examples/custom_stage_recipe.yaml`
+- `configs/examples/multi_dataset_pretrain_transfer.yaml`
 - `configs/foundation/factost_pretrain_zero_fewshot.yaml`
 - `configs/foundation/unist_pretrain_zero_fewshot.yaml`
 - `configs/foundation/opencity_pretrain_zero_fewshot.yaml`

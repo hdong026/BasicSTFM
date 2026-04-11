@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+import random
+from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset, Subset
 from torch.utils.data._utils.collate import default_collate
 
-from basicstfm.data.scaler import build_scaler
+from basicstfm.data.scaler import DatasetAwareScaler, build_scaler
 from basicstfm.data.window_dataset import WindowDataset
 from basicstfm.registry import DATAMODULES
 
@@ -43,6 +44,87 @@ def _load_numpy(path: str, key: str = "data") -> np.ndarray:
         loaded.close()
         return array
     return loaded
+
+
+class InterleavedNamedLoaders:
+    """Interleave batches from multiple loaders and attach dataset identity."""
+
+    def __init__(
+        self,
+        loaders: Mapping[str, DataLoader],
+        strategy: str = "round_robin",
+        steps_per_epoch: Optional[int] = None,
+        dataset_weights: Optional[Mapping[str, float]] = None,
+        seed: int = 42,
+    ) -> None:
+        if not loaders:
+            raise ValueError("InterleavedNamedLoaders requires at least one loader")
+        self.loaders = dict(loaders)
+        self.strategy = str(strategy)
+        self.steps_per_epoch = (
+            int(steps_per_epoch)
+            if steps_per_epoch is not None
+            else int(sum(max(1, len(loader)) for loader in self.loaders.values()))
+        )
+        if self.steps_per_epoch <= 0:
+            raise ValueError("steps_per_epoch must be positive")
+        self.dataset_weights = {
+            name: float(dataset_weights.get(name, len(loader)) if dataset_weights else len(loader))
+            for name, loader in self.loaders.items()
+        }
+        self.seed = int(seed)
+
+    def __len__(self) -> int:
+        return self.steps_per_epoch
+
+    def __iter__(self) -> Iterator[dict]:
+        names = list(self.loaders.keys())
+        iterators = {name: iter(loader) for name, loader in self.loaders.items()}
+        rng = random.Random(self.seed)
+        weight_vector = [max(self.dataset_weights.get(name, 0.0), 1e-6) for name in names]
+
+        for step in range(self.steps_per_epoch):
+            if self.strategy == "round_robin":
+                name = names[step % len(names)]
+            elif self.strategy in {"proportional", "size_proportional"}:
+                name = rng.choices(names, weights=weight_vector, k=1)[0]
+            elif self.strategy in {"uniform", "random"}:
+                name = rng.choice(names)
+            elif self.strategy == "sequential":
+                cursor = step
+                for candidate in names:
+                    loader_len = max(1, len(self.loaders[candidate]))
+                    if cursor < loader_len:
+                        name = candidate
+                        break
+                    cursor -= loader_len
+                else:
+                    name = names[-1]
+            else:
+                raise ValueError(f"Unknown train mixing strategy: {self.strategy}")
+
+            iterator = iterators[name]
+            try:
+                batch = next(iterator)
+            except StopIteration:
+                iterator = iter(self.loaders[name])
+                iterators[name] = iterator
+                batch = next(iterator)
+            yield batch
+
+
+class SequentialNamedLoaders:
+    """Yield validation/test batches dataset by dataset."""
+
+    def __init__(self, loaders: Mapping[str, DataLoader]) -> None:
+        self.loaders = dict(loaders)
+
+    def __len__(self) -> int:
+        return int(sum(len(loader) for loader in self.loaders.values()))
+
+    def __iter__(self) -> Iterator[dict]:
+        for loader in self.loaders.values():
+            yield from loader
 
 
 @DATAMODULES.register()
@@ -162,6 +244,8 @@ class WindowDataModule:
 
     def _collate(self, samples: List[Dict[str, Any]]) -> Dict[str, Any]:
         batch = default_collate(samples)
+        batch["x_mask"] = torch.ones_like(batch["x"], dtype=torch.bool)
+        batch["y_mask"] = torch.ones_like(batch["y"], dtype=torch.bool)
         if self.graph is not None:
             batch["graph"] = self.graph
         return batch
@@ -209,6 +293,307 @@ class WindowDataModule:
             "input_len": self.input_len,
             "target_len": self.target_len,
         }
+
+
+@DATAMODULES.register()
+class MultiDatasetWindowDataModule:
+    """Joint pretraining data module for multiple window datasets.
+
+    The module keeps one scaler and one loader per dataset, then exposes a
+    configurable interleaving strategy for training. Validation and test can be
+    returned either as a combined sequential loader or as a mapping of
+    per-dataset loaders so the trainer can compute macro metrics.
+    """
+
+    def __init__(
+        self,
+        datasets: Sequence[dict],
+        input_len: int,
+        target_len: Optional[int] = None,
+        output_len: Optional[int] = None,
+        input_key: str = "data",
+        graph_key: str = "adj",
+        batch_size: int = 32,
+        num_workers: int = 0,
+        split: Sequence[float] = (0.7, 0.1, 0.2),
+        stride: int = 1,
+        scaler: Optional[dict] = None,
+        shuffle_train: bool = True,
+        pin_memory: bool = False,
+        drop_last: bool = False,
+        train_strategy: str = "round_robin",
+        eval_strategy: str = "per_dataset",
+        steps_per_epoch: Optional[int] = None,
+        dataset_weights: Optional[dict] = None,
+        train_fraction: Optional[float] = None,
+        train_windows: Optional[int] = None,
+        few_shot_ratio: Optional[float] = None,
+        few_shot_windows: Optional[int] = None,
+        seed: int = 42,
+    ) -> None:
+        if output_len is not None:
+            target_len = output_len
+        if target_len is None:
+            raise ValueError("MultiDatasetWindowDataModule requires target_len or output_len")
+        if not datasets:
+            raise ValueError("MultiDatasetWindowDataModule requires a non-empty datasets list")
+        self.dataset_cfgs = [dict(item) for item in datasets]
+        self.input_len = int(input_len)
+        self.target_len = int(target_len)
+        self.default_input_key = input_key
+        self.default_graph_key = graph_key
+        self.default_split = tuple(split)
+        self.default_stride = int(stride)
+        self.default_scaler_cfg = scaler or {"type": "standard"}
+        self.batch_size = int(batch_size)
+        self.num_workers = int(num_workers)
+        self.shuffle_train = bool(shuffle_train)
+        self.pin_memory = bool(pin_memory)
+        self.drop_last = bool(drop_last)
+        self.train_strategy = str(train_strategy)
+        self.eval_strategy = str(eval_strategy)
+        self.steps_per_epoch = None if steps_per_epoch is None else int(steps_per_epoch)
+        self.dataset_weights = dict(dataset_weights or {})
+        self.train_fraction = train_fraction if train_fraction is not None else few_shot_ratio
+        self.train_windows = train_windows if train_windows is not None else few_shot_windows
+        self.seed = int(seed)
+
+        self.datasets_by_split: Dict[str, Dict[str, Dataset]] = {"train": {}, "val": {}, "test": {}}
+        self.graphs: Dict[str, Optional[torch.Tensor]] = {}
+        self.dataset_names: List[str] = []
+        self.dataset_batch_sizes: Dict[str, int] = {}
+        self.data_shapes: Dict[str, Tuple[int, int, int]] = {}
+        self.dataset_num_channels: Dict[str, int] = {}
+        self.dataset_metadata: Dict[str, Dict[str, Any]] = {}
+        self.name_to_index: Dict[str, int] = {}
+        self.max_num_nodes = 0
+        self.max_num_channels = 0
+        self.scaler: Optional[DatasetAwareScaler] = None
+
+    def setup(self) -> None:
+        self.datasets_by_split = {"train": {}, "val": {}, "test": {}}
+        self.graphs = {}
+        self.dataset_names = []
+        self.dataset_batch_sizes = {}
+        self.data_shapes = {}
+        self.dataset_num_channels = {}
+        self.dataset_metadata = {}
+        self.name_to_index = {}
+        self.max_num_nodes = 0
+        self.max_num_channels = 0
+        fitted_scalers = []
+
+        for raw_cfg in self.dataset_cfgs:
+            cfg = self._normalize_dataset_cfg(raw_cfg)
+            name = cfg["name"]
+            if name in self.name_to_index:
+                raise ValueError(f"Duplicate dataset name in multi-dataset config: {name}")
+
+            array = _load_numpy(cfg["data_path"], cfg["input_key"])
+            if array.ndim == 2:
+                array = array[..., None]
+            if array.ndim != 3:
+                raise ValueError(f"Expected [T, N, C] data for {name}, got {array.shape}")
+
+            train_len, val_len, test_len = _split_lengths(len(array), cfg["split"])
+            train_raw = array[:train_len]
+            val_raw = array[train_len : train_len + val_len]
+            test_raw = array[train_len + val_len : train_len + val_len + test_len]
+
+            scaler = build_scaler(cfg["scaler"])
+            scaler.fit(train_raw)
+            fitted_scalers.append(scaler)
+
+            self.name_to_index[name] = len(self.dataset_names)
+            self.dataset_names.append(name)
+            self.dataset_batch_sizes[name] = int(cfg["batch_size"])
+            self.data_shapes[name] = tuple(int(x) for x in array.shape)
+            self.dataset_num_channels[name] = int(array.shape[2])
+            self.max_num_nodes = max(self.max_num_nodes, int(array.shape[1]))
+            self.max_num_channels = max(self.max_num_channels, int(array.shape[2]))
+
+            self.datasets_by_split["train"][name] = WindowDataset(
+                train_raw,
+                self.input_len,
+                self.target_len,
+                int(cfg["stride"]),
+            )
+            self.datasets_by_split["val"][name] = WindowDataset(
+                val_raw,
+                self.input_len,
+                self.target_len,
+                int(cfg["stride"]),
+            )
+            self.datasets_by_split["test"][name] = WindowDataset(
+                test_raw,
+                self.input_len,
+                self.target_len,
+                int(cfg["stride"]),
+            )
+
+            graph = None
+            if cfg["graph_path"]:
+                loaded_graph = _load_numpy(cfg["graph_path"], cfg["graph_key"])
+                graph = torch.as_tensor(loaded_graph, dtype=torch.float32)
+            self.graphs[name] = graph
+            self.dataset_metadata[name] = {
+                "data_path": cfg["data_path"],
+                "graph_path": cfg["graph_path"],
+                "num_nodes": int(array.shape[1]),
+                "num_channels": int(array.shape[2]),
+                "input_len": self.input_len,
+                "target_len": self.target_len,
+                "batch_size": int(cfg["batch_size"]),
+                "split": list(cfg["split"]),
+                "stride": int(cfg["stride"]),
+            }
+
+        self.scaler = DatasetAwareScaler.from_scalers(
+            names=self.dataset_names,
+            scalers=fitted_scalers,
+            max_channels=self.max_num_channels,
+        )
+
+    def train_dataloader(
+        self,
+        train_fraction: Optional[float] = None,
+        train_windows: Optional[int] = None,
+        few_shot_ratio: Optional[float] = None,
+        few_shot_windows: Optional[int] = None,
+    ):
+        loaders = self._make_split_loaders(
+            "train",
+            fraction=train_fraction if train_fraction is not None else few_shot_ratio,
+            windows=train_windows if train_windows is not None else few_shot_windows,
+            shuffle=self.shuffle_train,
+        )
+        return InterleavedNamedLoaders(
+            loaders=loaders,
+            strategy=self.train_strategy,
+            steps_per_epoch=self.steps_per_epoch,
+            dataset_weights=self.dataset_weights,
+            seed=self.seed,
+        )
+
+    def val_dataloader(self):
+        loaders = self._make_split_loaders("val", shuffle=False)
+        if self.eval_strategy == "per_dataset":
+            return loaders
+        if self.eval_strategy == "combined":
+            return SequentialNamedLoaders(loaders)
+        raise ValueError(f"Unknown eval_strategy: {self.eval_strategy}")
+
+    def test_dataloader(self):
+        loaders = self._make_split_loaders("test", shuffle=False)
+        if self.eval_strategy == "per_dataset":
+            return loaders
+        if self.eval_strategy == "combined":
+            return SequentialNamedLoaders(loaders)
+        raise ValueError(f"Unknown eval_strategy: {self.eval_strategy}")
+
+    def get_scaler(self) -> object:
+        if self.scaler is None:
+            raise RuntimeError("DataModule scaler is unavailable before setup")
+        return self.scaler
+
+    def get_metadata(self) -> Dict[str, Any]:
+        if not self.dataset_names:
+            raise RuntimeError("DataModule metadata is unavailable before setup")
+        return {
+            "num_nodes": self.max_num_nodes,
+            "num_channels": self.max_num_channels,
+            "input_len": self.input_len,
+            "target_len": self.target_len,
+            "num_datasets": len(self.dataset_names),
+            "dataset_names": list(self.dataset_names),
+            "datasets": dict(self.dataset_metadata),
+        }
+
+    def _normalize_dataset_cfg(self, cfg: Dict[str, Any]) -> Dict[str, Any]:
+        data_path = cfg.get("data_path")
+        if not data_path:
+            raise ValueError("Each multi-dataset entry must define data_path")
+        name = str(cfg.get("name") or Path(data_path).parent.name or Path(data_path).stem)
+        return {
+            "name": name,
+            "data_path": str(data_path),
+            "graph_path": cfg.get("graph_path"),
+            "input_key": str(cfg.get("input_key", self.default_input_key)),
+            "graph_key": str(cfg.get("graph_key", self.default_graph_key)),
+            "split": tuple(cfg.get("split", self.default_split)),
+            "stride": int(cfg.get("stride", self.default_stride)),
+            "scaler": dict(cfg.get("scaler", self.default_scaler_cfg)),
+            "batch_size": int(cfg.get("batch_size", self.batch_size)),
+        }
+
+    def _make_split_loaders(
+        self,
+        split: str,
+        fraction: Optional[float] = None,
+        windows: Optional[int] = None,
+        shuffle: bool = False,
+    ) -> Dict[str, DataLoader]:
+        loaders: Dict[str, DataLoader] = {}
+        for name, dataset in self.datasets_by_split[split].items():
+            materialized = (
+                WindowDataModule._limit_dataset(dataset, fraction=fraction, windows=windows)
+                if split == "train"
+                else dataset
+            )
+            loaders[name] = DataLoader(
+                materialized,
+                batch_size=self.dataset_batch_sizes[name],
+                shuffle=shuffle,
+                num_workers=self.num_workers,
+                pin_memory=self.pin_memory,
+                drop_last=self.drop_last if split == "train" else False,
+                collate_fn=self._make_collate(name),
+            )
+        return loaders
+
+    def _make_collate(self, name: str):
+        dataset_index = int(self.name_to_index[name])
+        graph = self.graphs[name]
+        num_channels = int(self.dataset_num_channels[name])
+
+        def collate(samples: List[Dict[str, Any]]) -> Dict[str, Any]:
+            batch = default_collate(samples)
+            batch["x"] = self._pad_channels(batch["x"], self.max_num_channels)
+            batch["y"] = self._pad_channels(batch["y"], self.max_num_channels)
+            batch["x_mask"] = self._channel_mask(batch["x"], num_channels)
+            batch["y_mask"] = self._channel_mask(batch["y"], num_channels)
+            batch["dataset_name"] = name
+            batch["dataset_index"] = torch.full(
+                (batch["x"].shape[0],),
+                dataset_index,
+                dtype=torch.long,
+            )
+            batch["num_nodes"] = torch.full((batch["x"].shape[0],), batch["x"].shape[2], dtype=torch.long)
+            batch["num_channels"] = torch.full((batch["x"].shape[0],), num_channels, dtype=torch.long)
+            if graph is not None:
+                batch["graph"] = graph
+            return batch
+
+        return collate
+
+    @staticmethod
+    def _pad_channels(value: torch.Tensor, target_channels: int) -> torch.Tensor:
+        if value.shape[-1] == target_channels:
+            return value
+        if value.shape[-1] > target_channels:
+            raise ValueError(
+                f"Cannot pad channels from {value.shape[-1]} down to {target_channels}"
+            )
+        pad_shape = list(value.shape)
+        pad_shape[-1] = target_channels - value.shape[-1]
+        pad = value.new_zeros(pad_shape)
+        return torch.cat([value, pad], dim=-1)
+
+    @staticmethod
+    def _channel_mask(value: torch.Tensor, num_channels: int) -> torch.Tensor:
+        mask = value.new_zeros(value.shape)
+        mask[..., :num_channels] = 1
+        return mask
 
 
 @DATAMODULES.register()

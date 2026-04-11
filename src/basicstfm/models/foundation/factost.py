@@ -171,10 +171,10 @@ class FactoSTFoundationModel(nn.Module):
     def _patch(self, x: torch.Tensor) -> tuple[torch.Tensor, int, int]:
         x = ensure_4d(x)
         batch, steps, nodes, channels = x.shape
-        if nodes != self.num_nodes:
-            raise ValueError(f"Expected {self.num_nodes} nodes, got {nodes}")
-        if channels != self.input_dim:
-            raise ValueError(f"Expected input_dim={self.input_dim}, got {channels}")
+        if nodes > self.num_nodes:
+            raise ValueError(f"Expected at most {self.num_nodes} nodes, got {nodes}")
+        if channels > self.input_dim:
+            raise ValueError(f"Expected at most input_dim={self.input_dim}, got {channels}")
         if channels > self.max_channels:
             raise ValueError(f"input_dim={channels} exceeds max_channels={self.max_channels}")
         x, pad_len = pad_to_multiple(x, self.patch_len, dim=1)

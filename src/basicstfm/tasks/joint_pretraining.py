@@ -61,26 +61,32 @@ class JointReconstructionForecastTask(Task):
     def step(self, model: torch.nn.Module, batch: Dict[str, Any], losses, device: torch.device):
         batch = move_to_device(batch, device)
         raw_x = batch[self.input_key]
-        x = self.transform(raw_x)
+        x = self.transform(raw_x, batch=batch)
         target = batch[self.target_key]
 
-        mask = sample_spatiotemporal_mask(
+        sampled_mask = sample_spatiotemporal_mask(
             x,
             self.mask_ratio,
             strategy=self.mask_strategy,
             strategies=self.mask_strategies,
         )
-        masked_x = x.masked_fill(mask, self.mask_value)
+        recon_mask = self.merge_masks(sampled_mask, batch.get("x_mask"))
+        masked_x = x.masked_fill(recon_mask, self.mask_value)
 
-        outputs = model(masked_x, graph=batch.get("graph"), mask=mask, mode=self.model_mode)
+        outputs = model(masked_x, graph=batch.get("graph"), mask=recon_mask, mode=self.model_mode)
         if not isinstance(outputs, dict):
             raise TypeError("JointReconstructionForecastTask expects model outputs to be a dict")
 
-        recon = self.inverse_transform(outputs[self.reconstruction_key])
-        forecast = self.inverse_transform(outputs[self.forecast_key])
-        forecast_mask = batch.get(self.forecast_mask_key) if self.forecast_mask_key else None
+        recon = self.inverse_transform(outputs[self.reconstruction_key], batch=batch)
+        forecast = self.inverse_transform(outputs[self.forecast_key], batch=batch)
+        forecast_mask = self.merge_masks(
+            batch.get("y_mask"),
+            batch.get(self.forecast_mask_key) if self.forecast_mask_key else None,
+        )
+        raw_x, recon_mask = self.align_prediction_target(recon, raw_x, recon_mask)
+        target, forecast_mask = self.align_prediction_target(forecast, target, forecast_mask)
 
-        recon_loss_out = losses(recon, raw_x, mask=mask)
+        recon_loss_out = losses(recon, raw_x, mask=recon_mask)
         forecast_loss_out = losses(forecast, target, mask=forecast_mask)
         total = (
             self.reconstruction_weight * recon_loss_out["loss"]

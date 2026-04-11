@@ -39,9 +39,17 @@ class MaskedForecastCompletionTask(Task):
         history = batch[self.input_key]
         future = batch[self.target_key]
         full_sequence = torch.cat([history, future], dim=1)
-        scaled_sequence = self.transform(full_sequence)
+        scaled_sequence = self.transform(full_sequence, batch=batch)
 
-        mask = temporal_tail_mask(scaled_sequence, future_steps=future.shape[1])
+        sequence_mask = self.merge_masks(
+            torch.cat([batch.get("x_mask"), batch.get("y_mask")], dim=1)
+            if batch.get("x_mask") is not None and batch.get("y_mask") is not None
+            else None
+        )
+        mask = self.merge_masks(
+            temporal_tail_mask(scaled_sequence, future_steps=future.shape[1]),
+            sequence_mask,
+        )
         masked_sequence = scaled_sequence.masked_fill(mask, self.mask_value)
         outputs = model(
             masked_sequence,
@@ -50,9 +58,10 @@ class MaskedForecastCompletionTask(Task):
             mode=self.model_mode,
         )
         pred_full = outputs[self.output_key] if isinstance(outputs, dict) else outputs
-        pred_full = self.inverse_transform(pred_full)
+        pred_full = self.inverse_transform(pred_full, batch=batch)
         pred = pred_full[:, -future.shape[1] :]
-        future_mask = mask[:, -future.shape[1] :]
+        future_mask = self.merge_masks(mask[:, -future.shape[1] :], batch.get("y_mask"))
+        future, future_mask = self.align_prediction_target(pred, future, future_mask)
         loss_out = losses(pred, future, mask=future_mask)
         return {
             "loss": loss_out["loss"],

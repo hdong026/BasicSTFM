@@ -7,7 +7,7 @@ import fnmatch
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Iterable, Mapping, Optional
 
 import torch
 
@@ -166,7 +166,7 @@ class MultiStageTrainer:
             )
 
         if stage.eval_only:
-            val_logs = self._run_loader(
+            val_logs = self._run_eval_loaders(
                 loader=self.datamodule.val_dataloader(),
                 task=task,
                 losses=losses,
@@ -182,7 +182,7 @@ class MultiStageTrainer:
                     stage.name,
                     self._format_logs(val_logs),
                 )
-            test_logs = self._run_loader(
+            test_logs = self._run_eval_loaders(
                 loader=self.datamodule.test_dataloader(),
                 task=task,
                 losses=losses,
@@ -229,7 +229,7 @@ class MultiStageTrainer:
             log_payload = {"epoch": epoch, **train_logs}
 
             if epoch % stage.validate_every == 0:
-                val_logs = self._run_loader(
+                val_logs = self._run_eval_loaders(
                     loader=self.datamodule.val_dataloader(),
                     task=task,
                     losses=losses,
@@ -338,7 +338,7 @@ class MultiStageTrainer:
                 best_score=best_score,
                 tag="last",
             )
-        test_logs = self._run_loader(
+        test_logs = self._run_eval_loaders(
             loader=self.datamodule.test_dataloader(),
             task=task,
             losses=losses,
@@ -415,6 +415,61 @@ class MultiStageTrainer:
             return {}
         return {key: value / count for key, value in sums.items()}
 
+    def _run_eval_loaders(
+        self,
+        loader,
+        task,
+        losses: LossCollection,
+        metrics: MetricCollection,
+        optimizer: Optional[torch.optim.Optimizer],
+        train: bool,
+        gradient_clip_val: Optional[float],
+        prefix: Optional[str] = None,
+    ) -> Dict[str, float]:
+        if isinstance(loader, Mapping):
+            named_logs: Dict[str, Dict[str, float]] = {}
+            for dataset_name, subloader in loader.items():
+                named_logs[dataset_name] = self._run_loader(
+                    loader=subloader,
+                    task=task,
+                    losses=losses,
+                    metrics=metrics,
+                    optimizer=optimizer,
+                    train=train,
+                    gradient_clip_val=gradient_clip_val,
+                    prefix=prefix,
+                )
+            return self._aggregate_named_eval_logs(named_logs, prefix=prefix or ("train" if train else "val"))
+        return self._run_loader(
+            loader=loader,
+            task=task,
+            losses=losses,
+            metrics=metrics,
+            optimizer=optimizer,
+            train=train,
+            gradient_clip_val=gradient_clip_val,
+            prefix=prefix,
+        )
+
+    @staticmethod
+    def _aggregate_named_eval_logs(
+        named_logs: Dict[str, Dict[str, float]],
+        prefix: str,
+    ) -> Dict[str, float]:
+        aggregate: Dict[str, float] = {}
+        counts: Dict[str, int] = {}
+        for dataset_name, logs in named_logs.items():
+            for key, value in logs.items():
+                aggregate[key] = aggregate.get(key, 0.0) + float(value)
+                counts[key] = counts.get(key, 0) + 1
+                suffix = key[len(prefix) + 1 :] if key.startswith(f"{prefix}/") else key
+                aggregate[f"{prefix}/dataset/{dataset_name}/{suffix}"] = float(value)
+        for key, total in list(aggregate.items()):
+            if key.startswith(f"{prefix}/dataset/"):
+                continue
+            aggregate[key] = total / max(counts.get(key, 1), 1)
+        return aggregate
+
     def _train_dataloader_for_stage(self, stage: StageSpec):
         kwargs = {
             "train_fraction": stage.train_fraction,
@@ -449,7 +504,11 @@ class MultiStageTrainer:
         return deepcopy(self._stage_data_recipes[stage_index])
 
     def _compose_stage_model_config(self, stage_index: int) -> Dict[str, Any]:
-        return self._resolve_model_config(deepcopy(self._stage_model_recipes[stage_index]))
+        preserve_current = not self.plan.stages[stage_index].reset_model
+        return self._resolve_model_config(
+            deepcopy(self._stage_model_recipes[stage_index]),
+            preserve_current=preserve_current,
+        )
 
     def _compile_stage_recipes(
         self,
@@ -567,7 +626,11 @@ class MultiStageTrainer:
                 return str(resolved)
         return reference
 
-    def _resolve_model_config(self, model_cfg: Dict[str, Any]) -> Dict[str, Any]:
+    def _resolve_model_config(
+        self,
+        model_cfg: Dict[str, Any],
+        preserve_current: bool = True,
+    ) -> Dict[str, Any]:
         if self.datamodule is None or not hasattr(self.datamodule, "get_metadata"):
             return model_cfg
 
@@ -581,7 +644,10 @@ class MultiStageTrainer:
         }
         for key, value in inferred.items():
             if key not in model_cfg or _is_auto(model_cfg[key]):
-                model_cfg[key] = value
+                if preserve_current and self._current_model_cfg and not _is_auto(self._current_model_cfg.get(key)):
+                    model_cfg[key] = self._current_model_cfg[key]
+                else:
+                    model_cfg[key] = value
         return model_cfg
 
     def _prepare_resume(self) -> None:

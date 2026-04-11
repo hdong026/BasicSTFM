@@ -57,6 +57,7 @@ def flatten_stage_results(
             "train_windows": stage.get("train_windows"),
             "checkpoint": stage.get("checkpoint"),
             "dataset": _infer_dataset_name(stage.get("resolved_data")),
+            "dataset_names": _infer_dataset_names(stage.get("resolved_data")),
             "data_path": _read_nested(stage, "resolved_data", "data_path"),
             "graph_path": _read_nested(stage, "resolved_data", "graph_path"),
             "input_len": _read_nested(stage, "resolved_data", "input_len"),
@@ -169,10 +170,36 @@ def _merge_metric_block(row: Dict[str, Any], block: Any, prefix: str) -> None:
 def _infer_dataset_name(data_cfg: Any) -> Optional[str]:
     if not isinstance(data_cfg, dict):
         return None
+    datasets = _infer_dataset_names(data_cfg)
+    if datasets:
+        return "+".join(datasets)
     data_path = data_cfg.get("data_path")
     if not data_path:
         return None
     return Path(str(data_path)).parent.name or None
+
+
+def _infer_dataset_names(data_cfg: Any) -> Optional[List[str]]:
+    if not isinstance(data_cfg, dict):
+        return None
+    datasets = data_cfg.get("datasets")
+    if isinstance(datasets, list):
+        names = []
+        for item in datasets:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name")
+            if name:
+                names.append(str(name))
+                continue
+            data_path = item.get("data_path")
+            if data_path:
+                names.append(Path(str(data_path)).parent.name or Path(str(data_path)).stem)
+        return names or None
+    dataset_names = data_cfg.get("dataset_names")
+    if isinstance(dataset_names, list):
+        return [str(item) for item in dataset_names]
+    return None
 
 
 def _read_nested(mapping: Dict[str, Any], root: str, key: str) -> Any:

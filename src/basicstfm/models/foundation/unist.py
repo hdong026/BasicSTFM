@@ -6,6 +6,7 @@ from typing import Optional
 
 import torch
 from torch import nn
+from torch.nn import functional as F
 
 from basicstfm.models.foundation.common import (
     MemoryPool,
@@ -146,12 +147,17 @@ class UniSTFoundationModel(nn.Module):
     ) -> tuple[torch.Tensor, int, int, int]:
         x = ensure_4d(x)
         batch, steps, nodes, channels = x.shape
-        if nodes != self.num_nodes:
-            raise ValueError(f"Expected {self.num_nodes} nodes, got {nodes}")
-        if channels != self.input_dim:
-            raise ValueError(f"Expected input_dim={self.input_dim}, got {channels}")
+        if nodes > self.num_nodes:
+            raise ValueError(f"Expected at most {self.num_nodes} nodes, got {nodes}")
+        if channels > self.input_dim:
+            raise ValueError(f"Expected at most input_dim={self.input_dim}, got {channels}")
         if steps > self.max_seq_len:
             raise ValueError(f"Input length {steps} exceeds max_seq_len={self.max_seq_len}")
+        if channels < self.input_dim:
+            x = F.pad(x, (0, self.input_dim - channels))
+            if mask is not None:
+                mask = F.pad(mask, (0, self.input_dim - channels))
+            channels = self.input_dim
         h = self.value_proj(x)
         if mask is not None:
             token = self.mask_token.to(dtype=h.dtype, device=h.device)

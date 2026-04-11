@@ -26,17 +26,57 @@ class Task(ABC):
     def set_scaler(self, scaler: object) -> None:
         self.scaler = scaler
 
-    def transform(self, value: torch.Tensor) -> torch.Tensor:
+    def transform(self, value: torch.Tensor, batch: Dict[str, Any] | None = None) -> torch.Tensor:
         scaler = getattr(self, "scaler", None)
         if scaler is None:
             return value
-        return scaler.transform(value)
+        try:
+            return scaler.transform(value, batch=batch)
+        except TypeError:
+            return scaler.transform(value)
 
-    def inverse_transform(self, value: torch.Tensor) -> torch.Tensor:
+    def inverse_transform(self, value: torch.Tensor, batch: Dict[str, Any] | None = None) -> torch.Tensor:
         scaler = getattr(self, "scaler", None)
         if scaler is None:
             return value
-        return scaler.inverse_transform(value)
+        try:
+            return scaler.inverse_transform(value, batch=batch)
+        except TypeError:
+            return scaler.inverse_transform(value)
+
+    @staticmethod
+    def merge_masks(*masks: Any) -> Any:
+        merged = None
+        for mask in masks:
+            if mask is None:
+                continue
+            mask = mask.bool()
+            merged = mask if merged is None else (merged & mask)
+        return merged
+
+    @staticmethod
+    def align_prediction_target(
+        pred: torch.Tensor,
+        target: torch.Tensor,
+        mask: Any = None,
+    ) -> tuple[torch.Tensor, Any]:
+        if pred.shape[-1] == target.shape[-1]:
+            return target, mask
+        if pred.shape[-1] < target.shape[-1]:
+            target = target[..., : pred.shape[-1]]
+            if mask is not None:
+                mask = mask[..., : pred.shape[-1]]
+            return target, mask
+
+        pad_channels = pred.shape[-1] - target.shape[-1]
+        target_pad = target.new_zeros(*target.shape[:-1], pad_channels)
+        target = torch.cat([target, target_pad], dim=-1)
+        if mask is None:
+            mask = target.new_ones(*target.shape[:-1], target.shape[-1] - pad_channels, dtype=torch.bool)
+        mask = mask.bool()
+        mask_pad = mask.new_zeros(*mask.shape[:-1], pad_channels)
+        mask = torch.cat([mask, mask_pad], dim=-1)
+        return target, mask
 
     @abstractmethod
     def step(self, model: torch.nn.Module, batch: Dict[str, Any], losses, device: torch.device):
