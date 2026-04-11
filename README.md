@@ -210,6 +210,9 @@ Notes:
 | `configs/foundation/factost_pretrain_zero_fewshot.yaml` | FactoST-style UTP followed by factorized spatio-temporal adaptation |
 | `configs/foundation/unist_pretrain_zero_fewshot.yaml` | UniST-style masked pretraining followed by prompt-based transfer |
 | `configs/foundation/unist_multi_dataset_pretrain_transfer.yaml` | UniST-style joint multi-dataset pretraining, then target-domain zero-shot and prompt tuning |
+| `configs/foundation/opencity_multisource_benchmark.yaml` | OpenCity benchmark recipe with multisource pretraining and three held-out transfer targets |
+| `configs/foundation/factost_multisource_benchmark.yaml` | FactoST benchmark recipe with multisource UTP and three held-out STA transfers |
+| `configs/foundation/unist_multisource_benchmark.yaml` | UniST benchmark recipe with multisource pretraining and three held-out prompt-tuning targets |
 
 Current built-in alignment:
 
@@ -222,6 +225,12 @@ These recipes are designed to be **stage-faithful abstractions**, not literal li
 The original OpenCity, FactoST, and UniST papers all rely on multi-dataset
 joint pretraining. In BasicSTFM, that pattern is expressed through a
 stage-level `data` override that uses `MultiDatasetWindowDataModule`.
+
+For larger benchmark protocols, configs may also define:
+
+- `dataset_registry`: named canonical dataset entries;
+- `dataset_groups`: reusable source or held-out dataset splits;
+- `dataset_key`, `dataset_group`, `dataset_groups`, `dataset_keys`: shorthand references that expand into concrete paths during config loading.
 
 ## Stage Pipeline Abstraction
 

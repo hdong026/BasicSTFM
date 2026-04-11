@@ -81,6 +81,13 @@ as a stage-level data override. It exposes:
 - `train_strategy`: how training batches are mixed across datasets;
 - `eval_strategy`: whether validation/test stay per-dataset or are combined.
 
+For larger benchmark configs, you can define a top-level `dataset_registry`
+plus reusable `dataset_groups`, then reference them inside `data` blocks with:
+
+- `dataset_key` for one dataset;
+- `dataset_group` for one named source split;
+- `dataset_groups` or `dataset_keys` for concatenated source splits.
+
 ## 3. Express the Protocol as Stages
 
 Every experiment must define `pipeline.stages`.
