@@ -176,6 +176,32 @@ basicstfm train configs/foundation/unist_pretrain_zero_fewshot.yaml \
   trainer.auto_resume=true
 ```
 
+### 6. Single-node multi-GPU
+
+BasicSTFM now supports single-node distributed training through PyTorch DDP.
+
+Use:
+
+```bash
+torchrun --nproc_per_node=2 -m basicstfm train \
+  configs/foundation/unist_multi_dataset_pretrain_transfer.yaml
+```
+
+You can also set the trainer strategy explicitly:
+
+```bash
+torchrun --nproc_per_node=2 -m basicstfm train \
+  configs/foundation/unist_multi_dataset_pretrain_transfer.yaml \
+  --cfg-options \
+  trainer.strategy=ddp
+```
+
+Notes:
+
+- Training batches are sharded across GPUs.
+- Validation and test remain full-dataset evaluation on each rank, then are reduced to global metrics.
+- Checkpoints and `stage_results.json` are written by rank 0.
+
 ## Built-in Foundation Recipes
 
 | Recipe | Purpose |

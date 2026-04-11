@@ -9,6 +9,7 @@ from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Seque
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset, Subset
+from torch.utils.data.distributed import DistributedSampler
 from torch.utils.data._utils.collate import default_collate
 
 from basicstfm.data.scaler import DatasetAwareScaler, build_scaler
@@ -152,6 +153,10 @@ class WindowDataModule:
         train_windows: Optional[int] = None,
         few_shot_ratio: Optional[float] = None,
         few_shot_windows: Optional[int] = None,
+        distributed: bool = False,
+        world_size: int = 1,
+        rank: int = 0,
+        seed: int = 42,
     ) -> None:
         if output_len is not None:
             target_len = output_len
@@ -173,6 +178,11 @@ class WindowDataModule:
         self.drop_last = drop_last
         self.train_fraction = train_fraction if train_fraction is not None else few_shot_ratio
         self.train_windows = train_windows if train_windows is not None else few_shot_windows
+        self.distributed = bool(distributed)
+        self.world_size = int(world_size)
+        self.rank = int(rank)
+        self.seed = int(seed)
+        self._epoch = 0
         self.scaler = build_scaler(self.scaler_cfg)
         self.graph: Optional[torch.Tensor] = None
         self.datasets: Dict[str, Dataset] = {}
@@ -216,7 +226,12 @@ class WindowDataModule:
             fraction=train_fraction if train_fraction is not None else few_shot_ratio,
             windows=train_windows if train_windows is not None else few_shot_windows,
         )
-        return self._make_loader(dataset, shuffle=self.shuffle_train, drop_last=self.drop_last)
+        return self._make_loader(
+            dataset,
+            shuffle=self.shuffle_train,
+            drop_last=self.drop_last,
+            distributed=self.distributed,
+        )
 
     def val_dataloader(self) -> DataLoader:
         return self._loader("val", shuffle=False)
@@ -229,13 +244,27 @@ class WindowDataModule:
             self.datasets[split],
             shuffle=shuffle,
             drop_last=self.drop_last if split == "train" else False,
+            distributed=False,
         )
 
-    def _make_loader(self, dataset: Dataset, shuffle: bool, drop_last: bool) -> DataLoader:
+    def _make_loader(
+        self,
+        dataset: Dataset,
+        shuffle: bool,
+        drop_last: bool,
+        distributed: bool,
+    ) -> DataLoader:
+        sampler = self._build_sampler(
+            dataset,
+            shuffle=shuffle,
+            drop_last=drop_last,
+            distributed=distributed,
+        )
         return DataLoader(
             dataset,
             batch_size=self.batch_size,
-            shuffle=shuffle,
+            shuffle=shuffle if sampler is None else False,
+            sampler=sampler,
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
             drop_last=drop_last,
@@ -256,6 +285,30 @@ class WindowDataModule:
             fraction=self.train_fraction,
             windows=self.train_windows,
         )
+
+    def set_epoch(self, epoch: int) -> None:
+        self._epoch = int(epoch)
+
+    def _build_sampler(
+        self,
+        dataset: Dataset,
+        *,
+        shuffle: bool,
+        drop_last: bool,
+        distributed: bool,
+    ) -> Optional[DistributedSampler]:
+        if not distributed:
+            return None
+        sampler = DistributedSampler(
+            dataset,
+            num_replicas=self.world_size,
+            rank=self.rank,
+            shuffle=shuffle,
+            drop_last=drop_last,
+            seed=self.seed,
+        )
+        sampler.set_epoch(self._epoch)
+        return sampler
 
     @staticmethod
     def _limit_dataset(
@@ -330,6 +383,9 @@ class MultiDatasetWindowDataModule:
         few_shot_ratio: Optional[float] = None,
         few_shot_windows: Optional[int] = None,
         seed: int = 42,
+        distributed: bool = False,
+        world_size: int = 1,
+        rank: int = 0,
     ) -> None:
         if output_len is not None:
             target_len = output_len
@@ -357,6 +413,10 @@ class MultiDatasetWindowDataModule:
         self.train_fraction = train_fraction if train_fraction is not None else few_shot_ratio
         self.train_windows = train_windows if train_windows is not None else few_shot_windows
         self.seed = int(seed)
+        self.distributed = bool(distributed)
+        self.world_size = int(world_size)
+        self.rank = int(rank)
+        self._epoch = 0
 
         self.datasets_by_split: Dict[str, Dict[str, Dataset]] = {"train": {}, "val": {}, "test": {}}
         self.graphs: Dict[str, Optional[torch.Tensor]] = {}
@@ -496,6 +556,9 @@ class MultiDatasetWindowDataModule:
             raise RuntimeError("DataModule scaler is unavailable before setup")
         return self.scaler
 
+    def set_epoch(self, epoch: int) -> None:
+        self._epoch = int(epoch)
+
     def get_metadata(self) -> Dict[str, Any]:
         if not self.dataset_names:
             raise RuntimeError("DataModule metadata is unavailable before setup")
@@ -540,16 +603,44 @@ class MultiDatasetWindowDataModule:
                 if split == "train"
                 else dataset
             )
+            sampler = self._build_sampler(
+                materialized,
+                shuffle=shuffle,
+                drop_last=self.drop_last if split == "train" else False,
+                distributed=self.distributed and split == "train",
+            )
             loaders[name] = DataLoader(
                 materialized,
                 batch_size=self.dataset_batch_sizes[name],
-                shuffle=shuffle,
+                shuffle=shuffle if sampler is None else False,
+                sampler=sampler,
                 num_workers=self.num_workers,
                 pin_memory=self.pin_memory,
                 drop_last=self.drop_last if split == "train" else False,
                 collate_fn=self._make_collate(name),
             )
         return loaders
+
+    def _build_sampler(
+        self,
+        dataset: Dataset,
+        *,
+        shuffle: bool,
+        drop_last: bool,
+        distributed: bool,
+    ) -> Optional[DistributedSampler]:
+        if not distributed:
+            return None
+        sampler = DistributedSampler(
+            dataset,
+            num_replicas=self.world_size,
+            rank=self.rank,
+            shuffle=shuffle,
+            drop_last=drop_last,
+            seed=self.seed,
+        )
+        sampler.set_epoch(self._epoch)
+        return sampler
 
     def _make_collate(self, name: str):
         dataset_index = int(self.name_to_index[name])
@@ -622,6 +713,9 @@ class SyntheticDataModule(WindowDataModule):
         few_shot_windows: Optional[int] = None,
         seed: int = 42,
         noise_std: float = 0.05,
+        distributed: bool = False,
+        world_size: int = 1,
+        rank: int = 0,
     ) -> None:
         if output_len is not None:
             target_len = output_len
@@ -648,6 +742,10 @@ class SyntheticDataModule(WindowDataModule):
             train_windows=train_windows,
             few_shot_ratio=few_shot_ratio,
             few_shot_windows=few_shot_windows,
+            distributed=distributed,
+            world_size=world_size,
+            rank=rank,
+            seed=seed,
         )
 
     def setup(self) -> None:

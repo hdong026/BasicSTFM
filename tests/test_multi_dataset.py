@@ -14,7 +14,7 @@ if importlib.util.find_spec("torch") is None:
 import torch
 
 from basicstfm.builders import import_builtin_components
-from basicstfm.data.datamodule import MultiDatasetWindowDataModule
+from basicstfm.data.datamodule import MultiDatasetWindowDataModule, WindowDataModule
 from basicstfm.engines.trainer import MultiStageTrainer
 from basicstfm.losses.common import LossCollection
 from basicstfm.registry import MODELS, TASKS
@@ -132,6 +132,60 @@ class MultiDatasetDataModuleTest(unittest.TestCase):
         self.assertAlmostEqual(logs["val/metric/mae"], 2.0)
         self.assertEqual(logs["val/dataset/A/loss/total"], 2.0)
         self.assertEqual(logs["val/dataset/B/metric/mae"], 3.0)
+
+    def test_single_dataset_module_uses_distributed_sampler_when_requested(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            np.savez(root / "data.npz", data=np.random.randn(64, 5, 1).astype(np.float32))
+            np.savez(root / "adj.npz", adj=np.eye(5, dtype=np.float32))
+
+            datamodule = WindowDataModule(
+                data_path=str(root / "data.npz"),
+                graph_path=str(root / "adj.npz"),
+                input_len=6,
+                output_len=3,
+                batch_size=4,
+                split=(0.6, 0.2, 0.2),
+                distributed=True,
+                world_size=2,
+                rank=0,
+            )
+            datamodule.setup()
+            loader = datamodule.train_dataloader()
+            self.assertIsInstance(loader.sampler, torch.utils.data.distributed.DistributedSampler)
+
+    def test_multi_dataset_module_uses_distributed_sampler_when_requested(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            ds_a = root / "A"
+            ds_b = root / "B"
+            ds_a.mkdir()
+            ds_b.mkdir()
+
+            np.savez(ds_a / "data.npz", data=np.random.randn(48, 5, 1).astype(np.float32))
+            np.savez(ds_b / "data.npz", data=np.random.randn(48, 7, 1).astype(np.float32))
+
+            datamodule = MultiDatasetWindowDataModule(
+                datasets=[
+                    {"name": "A", "data_path": str(ds_a / "data.npz")},
+                    {"name": "B", "data_path": str(ds_b / "data.npz")},
+                ],
+                input_len=4,
+                output_len=2,
+                batch_size=2,
+                split=(0.6, 0.2, 0.2),
+                distributed=True,
+                world_size=2,
+                rank=0,
+            )
+            datamodule.setup()
+            loader = datamodule.train_dataloader()
+            self.assertTrue(loader.loaders)
+            for subloader in loader.loaders.values():
+                self.assertIsInstance(
+                    subloader.sampler,
+                    torch.utils.data.distributed.DistributedSampler,
+                )
 
 
 if __name__ == "__main__":

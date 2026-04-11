@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from copy import deepcopy
 import fnmatch
+import inspect
 import json
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional
 
 import torch
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel
 
 from basicstfm.engines.stage import StagePlan, StageSpec
 from basicstfm.losses.common import LossCollection
@@ -17,6 +20,14 @@ from basicstfm.metrics.common import MetricCollection
 from basicstfm.optim.factory import build_optimizer, build_scheduler
 from basicstfm.registry import DATAMODULES, MODELS, TASKS, TRAINERS
 from basicstfm.utils.checkpoint import load_checkpoint, read_checkpoint_metadata, save_checkpoint
+from basicstfm.utils.distributed import (
+    DistributedContext,
+    barrier,
+    broadcast_string,
+    cleanup_distributed,
+    init_distributed,
+    unwrap_model,
+)
 from basicstfm.utils.logging import get_logger
 from basicstfm.utils.seed import seed_everything
 
@@ -35,6 +46,10 @@ class MultiStageTrainer:
         auto_resume: bool = False,
         resume_strict: bool = True,
         dry_run: bool = False,
+        strategy: str = "auto",
+        backend: Optional[str] = None,
+        find_unused_parameters: bool = True,
+        broadcast_buffers: bool = False,
     ) -> None:
         self.cfg = cfg
         self.log_every = int(log_every)
@@ -42,9 +57,19 @@ class MultiStageTrainer:
         self.auto_resume = auto_resume
         self.resume_strict = resume_strict
         self.dry_run = dry_run
-        self.logger = get_logger()
+        self.distributed: DistributedContext = (
+            DistributedContext(enabled=False, strategy="single")
+            if dry_run
+            else init_distributed(strategy=strategy, backend=backend)
+        )
+        self.find_unused_parameters = bool(find_unused_parameters)
+        self.broadcast_buffers = bool(broadcast_buffers)
+        self.logger = get_logger(
+            rank=self.distributed.rank,
+            is_main_process=self.distributed.is_main_process,
+        )
         self.plan = StagePlan.from_config(cfg)
-        self.work_dir = Path(work_dir or cfg.get("work_dir") or self._default_work_dir())
+        self.work_dir = Path(self._resolve_work_dir(work_dir or cfg.get("work_dir")))
         self.device = self._resolve_device(device)
         self.datamodule = None
         self.model: Optional[torch.nn.Module] = None
@@ -70,29 +95,41 @@ class MultiStageTrainer:
         self.stage_results: list[Dict[str, Any]] = []
 
     def run(self) -> None:
-        seed_everything(int(self.cfg.get("seed", 42)))
-        self.logger.info("Stage plan:\n%s", json.dumps(self.plan.describe(), indent=2))
-        if self.dry_run:
-            self.logger.info("Dry run complete. No model or data objects were built.")
-            return
+        try:
+            seed_everything(int(self.cfg.get("seed", 42)))
+            self.logger.info("Stage plan:\n%s", json.dumps(self.plan.describe(), indent=2))
+            if self.dry_run:
+                self.logger.info("Dry run complete. No model or data objects were built.")
+                return
 
-        self.setup()
-        self._prepare_resume()
-        resume_stage_index = self._resume_stage_index()
-        for stage_index, stage in enumerate(self.plan.stages):
-            if resume_stage_index is not None and stage_index < resume_stage_index:
-                self.logger.info(
-                    "Skipping completed stage %s due to resume checkpoint",
-                    stage.name,
-                )
-                continue
-            self.run_stage(stage, stage_index)
+            self.setup()
+            self._prepare_resume()
+            resume_stage_index = self._resume_stage_index()
+            for stage_index, stage in enumerate(self.plan.stages):
+                if resume_stage_index is not None and stage_index < resume_stage_index:
+                    self.logger.info(
+                        "Skipping completed stage %s due to resume checkpoint",
+                        stage.name,
+                    )
+                    continue
+                self.run_stage(stage, stage_index)
+        finally:
+            cleanup_distributed(self.distributed)
 
     def setup(self) -> None:
         self.work_dir.mkdir(parents=True, exist_ok=True)
         (self.work_dir / "results").mkdir(parents=True, exist_ok=True)
         self.logger.info("Work directory: %s", self.work_dir)
         self.logger.info("Device: %s", self.device)
+        if self.distributed.enabled:
+            self.logger.info(
+                "Distributed strategy: %s (backend=%s, world_size=%d, rank=%d, local_rank=%d)",
+                self.distributed.strategy,
+                self.distributed.backend,
+                self.distributed.world_size,
+                self.distributed.rank,
+                self.distributed.local_rank,
+            )
 
     def run_stage(self, stage: StageSpec, stage_index: int = 0) -> None:
         self._prepare_stage_components(stage, stage_index)
@@ -216,6 +253,8 @@ class MultiStageTrainer:
             return
 
         for epoch in range(start_epoch, stage.epochs + 1):
+            if self.datamodule is not None and hasattr(self.datamodule, "set_epoch"):
+                self.datamodule.set_epoch(epoch)
             score_for_scheduler: Optional[float] = None
             train_logs = self._run_loader(
                 loader=self._train_dataloader_for_stage(stage),
@@ -413,6 +452,16 @@ class MultiStageTrainer:
 
         if count == 0:
             return {}
+        if self.distributed.enabled:
+            count_tensor = torch.tensor(float(count), device=self.device)
+            dist.all_reduce(count_tensor, op=dist.ReduceOp.SUM)
+            reduced_count = max(float(count_tensor.item()), 1.0)
+            reduced_logs = {}
+            for key in sorted(sums):
+                tensor = torch.tensor(float(sums[key]), device=self.device)
+                dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
+                reduced_logs[key] = float(tensor.item()) / reduced_count
+            return reduced_logs
         return {key: value / count for key, value in sums.items()}
 
     def _run_eval_loaders(
@@ -483,6 +532,7 @@ class MultiStageTrainer:
 
     def _prepare_stage_components(self, stage: StageSpec, stage_index: int) -> None:
         data_cfg = self._compose_stage_data_config(stage_index)
+        data_cfg = self._inject_runtime_data_kwargs(data_cfg)
         if self.datamodule is None or self._current_data_cfg != data_cfg:
             self.datamodule = DATAMODULES.build(data_cfg)
             self.datamodule.setup()
@@ -495,9 +545,10 @@ class MultiStageTrainer:
 
         model_cfg = self._compose_stage_model_config(stage_index)
         if self.model is None or self._current_model_cfg != model_cfg:
-            self.model = MODELS.build(model_cfg).to(self.device)
+            model = MODELS.build(model_cfg).to(self.device)
+            self.model = self._wrap_model(model)
             self._current_model_cfg = deepcopy(model_cfg)
-            self.logger.info("Model: %s", self.model.__class__.__name__)
+            self.logger.info("Model: %s", unwrap_model(self.model).__class__.__name__)
             self.logger.info("Resolved model config: %s", json.dumps(model_cfg, sort_keys=True))
 
     def _compose_stage_data_config(self, stage_index: int) -> Dict[str, Any]:
@@ -562,10 +613,11 @@ class MultiStageTrainer:
         if self.model is None:
             raise RuntimeError("Model is not initialized")
 
+        model = unwrap_model(self.model)
         if stage.load_method in {"checkpoint", "state_dict"}:
             return load_checkpoint(
                 path,
-                self.model,
+                model,
                 optimizer=optimizer,
                 scheduler=scheduler,
                 strict=strict,
@@ -573,10 +625,10 @@ class MultiStageTrainer:
                 restore_rng=restore_rng,
             )
 
-        loader = getattr(self.model, stage.load_method, None)
+        loader = getattr(model, stage.load_method, None)
         if loader is None:
             raise AttributeError(
-                f"Model {self.model.__class__.__name__} has no load method {stage.load_method!r}"
+                f"Model {model.__class__.__name__} has no load method {stage.load_method!r}"
             )
         try:
             result = loader(path, strict=strict)
@@ -601,15 +653,16 @@ class MultiStageTrainer:
     def _apply_trainability(self, stage: StageSpec) -> None:
         if self.model is None:
             raise RuntimeError("Model is not initialized")
-        for param in self.model.parameters():
+        model = unwrap_model(self.model)
+        for param in model.parameters():
             param.requires_grad = True
-        for name, param in self.model.named_parameters():
+        for name, param in model.named_parameters():
             if _matches_any(name, stage.freeze):
                 param.requires_grad = False
             if _matches_any(name, stage.unfreeze):
                 param.requires_grad = True
-        trainable = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
-        total = sum(p.numel() for p in self.model.parameters())
+        trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        total = sum(p.numel() for p in model.parameters())
         self.logger.info("Trainable parameters after stage rules: %d / %d", trainable, total)
 
     def _resolve_checkpoint_reference(self, reference: str) -> str:
@@ -727,13 +780,15 @@ class MultiStageTrainer:
             "work_dir": str(self.work_dir),
             "save_artifact": stage.save_artifact,
         }
-        save_checkpoint(
-            str(path),
-            model,
-            optimizer=optimizer,
-            scheduler=scheduler,
-            extra=extra,
-        )
+        if self.distributed.is_main_process:
+            save_checkpoint(
+                str(path),
+                unwrap_model(model),
+                optimizer=optimizer,
+                scheduler=scheduler,
+                extra=extra,
+            )
+        barrier(self.distributed)
         self.last_checkpoint = str(path)
         if tag == "last":
             self.artifacts[stage.name] = str(path)
@@ -784,7 +839,8 @@ class MultiStageTrainer:
                 break
         else:
             self.stage_results.append(result)
-        self._write_stage_results()
+        if self.distributed.is_main_process:
+            self._write_stage_results()
 
     def _stage_results_path(self) -> Path:
         return self.work_dir / "results" / "stage_results.json"
@@ -816,14 +872,66 @@ class MultiStageTrainer:
         )
 
     def _resolve_device(self, device: str) -> torch.device:
+        if self.distributed.enabled and torch.cuda.is_available():
+            if device in {"auto", "cuda"}:
+                return torch.device(f"cuda:{self.distributed.local_rank}")
         if device == "auto":
             return torch.device("cuda" if torch.cuda.is_available() else "cpu")
         return torch.device(device)
+
+    def _resolve_work_dir(self, work_dir: Optional[str]) -> str:
+        if work_dir:
+            return str(work_dir)
+        if self.distributed.enabled:
+            value = self._default_work_dir() if self.distributed.is_main_process else None
+            resolved = broadcast_string(self.distributed, value)
+            if resolved is None:
+                raise RuntimeError("Failed to broadcast distributed work directory")
+            return resolved
+        return self._default_work_dir()
 
     def _default_work_dir(self) -> str:
         name = str(self.cfg.get("experiment_name", "basicstfm_experiment"))
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         return str(Path("runs") / name / stamp)
+
+    def _wrap_model(self, model: torch.nn.Module) -> torch.nn.Module:
+        if not self.distributed.enabled:
+            return model
+        kwargs = {
+            "find_unused_parameters": self.find_unused_parameters,
+            "broadcast_buffers": self.broadcast_buffers,
+        }
+        if self.device.type == "cuda":
+            return DistributedDataParallel(
+                model,
+                device_ids=[self.distributed.local_rank],
+                output_device=self.distributed.local_rank,
+                **kwargs,
+            )
+        return DistributedDataParallel(model, **kwargs)
+
+    def _inject_runtime_data_kwargs(self, data_cfg: Dict[str, Any]) -> Dict[str, Any]:
+        data_type = data_cfg.get("type")
+        if data_type is None or data_type not in DATAMODULES:
+            return data_cfg
+        constructor = DATAMODULES.get(str(data_type))
+        try:
+            parameters = inspect.signature(constructor).parameters
+        except (TypeError, ValueError):
+            return data_cfg
+
+        runtime_values = {
+            "distributed": self.distributed.enabled,
+            "world_size": self.distributed.world_size,
+            "rank": self.distributed.rank,
+            "seed": int(self.cfg.get("seed", 42)),
+        }
+        merged = deepcopy(data_cfg)
+        for key, value in runtime_values.items():
+            if key in parameters:
+                merged[key] = value
+        return merged
 
     @staticmethod
     def _format_logs(logs: Dict[str, Any]) -> str:
