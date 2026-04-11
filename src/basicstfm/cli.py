@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
+import sys
 from typing import Any, Dict, Optional
 
 from .builders import import_builtin_components, import_custom_modules
@@ -32,6 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[list[str]] = None) -> None:
     parser = build_parser()
     args = parser.parse_args(argv)
+    _prepare_import_paths(args.config)
     cfg: Dict[str, Any] = load_config(args.config, overrides=args.cfg_options)
 
     if args.command == "print-config":
@@ -52,6 +55,29 @@ def main(argv: Optional[list[str]] = None) -> None:
         dry_run=args.command == "dry-run",
     )
     trainer.run()
+
+
+def _prepare_import_paths(config_path: str) -> None:
+    """Add common local paths so ``custom_imports`` works in editable repo usage."""
+
+    candidates = []
+    cwd = Path.cwd().resolve()
+    candidates.append(cwd)
+
+    cfg_path = Path(config_path).expanduser()
+    if not cfg_path.is_absolute():
+        cfg_path = (cwd / cfg_path).resolve()
+    if cfg_path.exists():
+        candidates.append(cfg_path.parent)
+        for parent in cfg_path.parents:
+            candidates.append(parent)
+            if (parent / "pyproject.toml").exists() or (parent / "setup.py").exists():
+                break
+
+    for path in candidates:
+        text = str(path)
+        if text not in sys.path:
+            sys.path.insert(0, text)
 
 
 if __name__ == "__main__":
