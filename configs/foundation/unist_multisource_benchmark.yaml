@@ -107,7 +107,6 @@ pipeline:
         batch_size: 4
         train_strategy: uniform
         eval_strategy: per_dataset
-        steps_per_epoch: 500
         split: [0.7, 0.1, 0.2]
         scaler:
           type: standard

@@ -255,6 +255,14 @@ class MultiStageTrainer:
         for epoch in range(start_epoch, stage.epochs + 1):
             if self.datamodule is not None and hasattr(self.datamodule, "set_epoch"):
                 self.datamodule.set_epoch(epoch)
+            self.logger.info("=" * 88)
+            self.logger.info(
+                "Stage %s | Epoch %d/%d",
+                stage.name,
+                epoch,
+                stage.epochs,
+            )
+            self.logger.info("=" * 88)
             score_for_scheduler: Optional[float] = None
             train_logs = self._run_loader(
                 loader=self._train_dataloader_for_stage(stage),
@@ -319,6 +327,7 @@ class MultiStageTrainer:
                 epoch,
                 self._format_logs(log_payload),
             )
+            self.logger.info("-" * 88)
 
             if epoch % stage.save_every == 0:
                 if stage.save_epoch_checkpoints:
