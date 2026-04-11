@@ -7,7 +7,13 @@ from typing import Optional
 import torch
 from torch import nn
 
-from basicstfm.models.foundation.common import MemoryPool, TransformerBlock, ensure_4d, load_weights
+from basicstfm.models.foundation.common import (
+    MemoryPool,
+    TransformerBlock,
+    ensure_4d,
+    load_filtered_weights,
+    load_weights,
+)
 from basicstfm.registry import MODELS
 
 
@@ -117,6 +123,16 @@ class UniSTFoundationModel(nn.Module):
 
         if pretrained_path:
             load_weights(self, pretrained_path, strict=strict_load)
+
+    def load_backbone_weights(self, path: str, strict: bool = False) -> tuple[list[str], list[str]]:
+        """Load the stage-1 backbone while leaving prompt memories stage-local."""
+
+        return load_filtered_weights(
+            self,
+            path,
+            strict=strict,
+            exclude_prefixes=("prompt.",),
+        )
 
     def reset_parameters(self) -> None:
         nn.init.trunc_normal_(self.temporal_pos, std=0.02)

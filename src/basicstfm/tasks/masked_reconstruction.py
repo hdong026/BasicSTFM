@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional, Sequence
 
 import torch
 
 from basicstfm.registry import TASKS
+from basicstfm.tasks.masking import sample_spatiotemporal_mask
 from basicstfm.tasks.base import Task, move_to_device
 
 
@@ -20,6 +21,8 @@ class MaskedReconstructionTask(Task):
         output_key: str = "reconstruction",
         mask_ratio: float = 0.25,
         mask_value: float = 0.0,
+        mask_strategy: str = "random",
+        mask_strategies: Optional[Sequence[str]] = None,
         model_mode: str = "reconstruct",
     ) -> None:
         if not 0.0 < mask_ratio < 1.0:
@@ -28,14 +31,20 @@ class MaskedReconstructionTask(Task):
         self.output_key = output_key
         self.mask_ratio = mask_ratio
         self.mask_value = mask_value
+        self.mask_strategy = mask_strategy
+        self.mask_strategies = mask_strategies
         self.model_mode = model_mode
 
     def step(self, model: torch.nn.Module, batch: Dict[str, Any], losses, device: torch.device):
         batch = move_to_device(batch, device)
         raw_x = batch[self.input_key]
         x = self.transform(raw_x)
-        mask = torch.rand_like(x[..., :1]) < self.mask_ratio
-        mask = mask.expand_as(x)
+        mask = sample_spatiotemporal_mask(
+            x,
+            self.mask_ratio,
+            strategy=self.mask_strategy,
+            strategies=self.mask_strategies,
+        )
         masked_x = x.masked_fill(mask, self.mask_value)
         outputs = model(masked_x, graph=batch.get("graph"), mask=mask, mode=self.model_mode)
         pred_scaled = outputs[self.output_key] if isinstance(outputs, dict) else outputs

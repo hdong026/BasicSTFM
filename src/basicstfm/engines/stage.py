@@ -10,13 +10,19 @@ from typing import Any, Dict, Iterable, List, Optional
 class StageSpec:
     name: str
     task: Dict[str, Any]
+    model: Optional[Dict[str, Any]] = None
+    data: Optional[Dict[str, Any]] = None
+    reset_model: bool = False
+    reset_data: bool = False
     epochs: int = 1
     losses: List[Dict[str, Any]] = field(default_factory=lambda: [{"type": "mae"}])
     metrics: List[Dict[str, Any]] = field(default_factory=list)
     optimizer: Dict[str, Any] = field(default_factory=lambda: {"type": "AdamW", "lr": 1e-3})
     scheduler: Optional[Dict[str, Any]] = None
     load_from: Optional[str] = None
+    load_method: str = "checkpoint"
     strict_load: bool = True
+    save_artifact: Optional[str] = None
     freeze: List[str] = field(default_factory=list)
     unfreeze: List[str] = field(default_factory=list)
     validate_every: int = 1
@@ -86,9 +92,15 @@ class StagePlan:
                 "name": stage.name,
                 "epochs": stage.epochs,
                 "task": stage.task.get("type"),
+                "model": None if stage.model is None else stage.model.get("type", "<inherit>"),
+                "data": None if stage.data is None else stage.data.get("type", "<inherit>"),
+                "reset_model": stage.reset_model,
+                "reset_data": stage.reset_data,
                 "losses": [loss.get("type") for loss in stage.losses],
                 "metrics": [metric.get("type") for metric in stage.metrics],
                 "load_from": stage.load_from,
+                "load_method": stage.load_method,
+                "save_artifact": stage.save_artifact,
                 "freeze": stage.freeze,
                 "unfreeze": stage.unfreeze,
                 "eval_only": stage.eval_only,

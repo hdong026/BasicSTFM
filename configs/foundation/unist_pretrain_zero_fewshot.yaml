@@ -37,10 +37,15 @@ model:
 pipeline:
   stages:
     - name: masked_spatiotemporal_pretrain
+      save_artifact: unist_pretrain
       epochs: 5
+      model:
+        use_prompt: false
       task:
         type: MaskedReconstructionTask
         mask_ratio: 0.5
+        mask_strategy: mixed
+        mask_strategies: [random, temporal, tube, block]
       losses:
         - type: mse
       metrics:
@@ -58,11 +63,13 @@ pipeline:
     - name: zero_shot_test
       eval_only: true
       epochs: 0
-      load_from: previous
-      strict_load: true
+      load_from: unist_pretrain
+      load_method: load_backbone_weights
+      strict_load: false
+      model:
+        use_prompt: true
       task:
-        type: ForecastingTask
-        model_mode: zero_shot
+        type: MaskedForecastCompletionTask
       losses:
         - type: mae
       metrics:
@@ -71,17 +78,19 @@ pipeline:
 
     - name: five_percent_prompt_tuning
       epochs: 3
-      load_from: previous
-      strict_load: true
+      load_from: unist_pretrain
+      load_method: load_backbone_weights
+      strict_load: false
+      model:
+        use_prompt: true
       few_shot_ratio: 0.05
       freeze:
         - all
       unfreeze:
         - prompt.*
-        - forecast_head.*
+        - reconstruction_head.*
       task:
-        type: ForecastingTask
-        model_mode: prompt_forecast
+        type: MaskedForecastCompletionTask
       losses:
         - type: mae
           weight: 1.0

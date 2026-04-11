@@ -1,0 +1,145 @@
+experiment_name: custom_stage_pipeline
+seed: 42
+
+# Uncomment these entries to load your own registered components.
+# custom_imports:
+#   - examples.custom_model
+#   - examples.custom_task
+#   - examples.custom_loss
+#   - my_project.models
+#   - my_project.tasks
+#   - my_project.losses
+
+trainer:
+  type: MultiStageTrainer
+  device: auto
+  work_dir: runs/custom_stage_pipeline
+  log_every: 20
+
+data:
+  type: SyntheticDataModule
+  num_timesteps: 720
+  num_nodes: 32
+  num_channels: 1
+  input_len: 24
+  output_len: 12
+  batch_size: 16
+  split: [0.7, 0.1, 0.2]
+  scaler:
+    type: standard
+
+model:
+  type: TinySTFoundationModel
+  num_nodes: auto
+  input_dim: auto
+  output_dim: auto
+  input_len: auto
+  output_len: auto
+  hidden_dim: 64
+  num_layers: 2
+  num_heads: 4
+  ffn_dim: 128
+
+pipeline:
+  stages:
+    - name: backbone_pretrain
+      save_artifact: pretrained_backbone
+      epochs: 2
+      task:
+        type: MaskedReconstructionTask
+        mask_ratio: 0.5
+      losses:
+        - type: mse
+      metrics:
+        - type: mae
+      optimizer:
+        type: AdamW
+        lr: 0.001
+        weight_decay: 0.0001
+      scheduler:
+        type: CosineAnnealingLR
+        T_max: 2
+      validate_every: 1
+      gradient_clip_val: 5.0
+
+    - name: zero_shot_eval
+      eval_only: true
+      epochs: 0
+      load_from: pretrained_backbone
+      task:
+        type: ForecastingTask
+      losses:
+        - type: mae
+      metrics:
+        - type: mae
+        - type: rmse
+
+    - name: few_shot_adaptation
+      epochs: 2
+      load_from: pretrained_backbone
+      # Use a custom model loader if the downstream stage should only inherit
+      # part of the saved weights.
+      # load_method: load_backbone_weights
+      # strict_load: false
+      few_shot_ratio: 0.05
+      freeze:
+        - all
+      unfreeze:
+        - forecast_head.*
+      task:
+        type: ForecastingTask
+      losses:
+        - type: mae
+          weight: 1.0
+        - type: mse
+          weight: 0.05
+      metrics:
+        - type: mae
+        - type: rmse
+      optimizer:
+        type: AdamW
+        lr: 0.0005
+        weight_decay: 0.0001
+      scheduler:
+        type: CosineAnnealingLR
+        T_max: 2
+      validate_every: 1
+      gradient_clip_val: 5.0
+
+    # When a later stage changes model family, start from a fresh recipe to
+    # avoid inheriting incompatible keys from the previous model config.
+    # - name: family_switch_adapter
+    #   reset_model: true
+    #   load_from: pretrained_backbone
+    #   load_method: load_backbone_weights
+    #   strict_load: false
+    #   model:
+    #     type: MyAdapterModel
+    #     num_nodes: auto
+    #     input_dim: auto
+    #     output_dim: auto
+    #     input_len: auto
+    #     output_len: auto
+    #     hidden_dim: 128
+    #   task:
+    #     type: ForecastingTask
+
+    # Likewise, if a stage uses a different datamodule family or a new dataset,
+    # reset the data recipe explicitly.
+    # - name: new_dataset_eval
+    #   reset_data: true
+    #   data:
+    #     type: WindowDataModule
+    #     data_path: data/target/data.npz
+    #     graph_path: data/target/adj.npz
+    #     input_len: 24
+    #     output_len: 12
+    #     batch_size: 32
+    #     split: [0.0, 0.5, 0.5]
+    #     scaler:
+    #       type: standard
+    #   eval_only: true
+    #   epochs: 0
+    #   load_from: pretrained_backbone
+    #   task:
+    #     type: ForecastingTask

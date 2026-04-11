@@ -14,6 +14,8 @@ BUILTIN_MODULES = (
     "basicstfm.models.foundation",
     "basicstfm.tasks.contrastive",
     "basicstfm.tasks.forecasting",
+    "basicstfm.tasks.joint_pretraining",
+    "basicstfm.tasks.masked_forecast_completion",
     "basicstfm.tasks.masked_reconstruction",
     "basicstfm.engines.trainer",
 )

@@ -6,12 +6,15 @@ import math
 from typing import Optional
 
 import torch
+from torch.nn import functional as F
 from torch import nn
 
 from basicstfm.models.foundation.common import (
     TransformerBlock,
     ensure_4d,
+    load_filtered_weights,
     load_weights,
+    normalize_adjacency,
     pad_to_multiple,
 )
 from basicstfm.registry import MODELS
@@ -19,13 +22,15 @@ from basicstfm.registry import MODELS
 
 @MODELS.register("FactoSTFoundationModel")
 class FactoSTFoundationModel(nn.Module):
-    """Factorized temporal backbone with lightweight ST adaptation.
+    """Factorized temporal backbone with framework-native ST adaptation.
 
     FactoST decouples universal temporal pretraining from domain-specific
     spatio-temporal adaptation. This implementation keeps that decomposition:
     a channel-independent patch Transformer acts as the universal temporal
-    backbone, while low-rank prompts and node/time metadata gates provide the
-    factorized adapter used for zero-shot and few-shot transfer stages.
+    backbone, while a reusable ST adapter adds three ingredients inspired by
+    the original design: metadata fusion, relation filtering, and prototype
+    refinement. The implementation stays generic to the framework tensor API
+    instead of depending on dataset-specific holiday or clock metadata.
     """
 
     def __init__(
@@ -45,6 +50,12 @@ class FactoSTFoundationModel(nn.Module):
         max_patches: int = 4096,
         max_channels: int = 64,
         use_st_adapter: bool = True,
+        use_st_metadata: bool = True,
+        use_st_filtering: bool = True,
+        use_cpr: bool = True,
+        filter_matrices: Optional[tuple[str, ...]] = None,
+        max_delay_steps: int = 3,
+        num_prototypes: int = 8,
         pretrained_path: Optional[str] = None,
         strict_load: bool = False,
     ) -> None:
@@ -61,7 +72,13 @@ class FactoSTFoundationModel(nn.Module):
         self.max_patches = int(max_patches)
         self.max_channels = int(max_channels)
         self.use_st_adapter = bool(use_st_adapter)
+        self.use_st_metadata = bool(use_st_metadata) and self.use_st_adapter
+        self.use_st_filtering = bool(use_st_filtering) and self.use_st_metadata
+        self.use_cpr = bool(use_cpr) and self.use_st_metadata
         self.num_prompt_tokens = int(num_prompt_tokens)
+        self.filter_matrices = tuple(filter_matrices or ("S_s", "S_t", "S_d"))
+        self.max_delay_steps = int(max_delay_steps)
+        self.num_prototypes = int(num_prototypes)
 
         self.patch_proj = nn.Linear(self.patch_len, self.hidden_dim)
         self.patch_decoder = nn.Linear(self.hidden_dim, self.patch_len)
@@ -81,6 +98,22 @@ class FactoSTFoundationModel(nn.Module):
             nn.Linear(self.hidden_dim, self.hidden_dim),
             nn.Sigmoid(),
         )
+        self.st_node_proj = nn.Linear(self.hidden_dim, self.hidden_dim)
+        self.st_channel_proj = nn.Linear(self.hidden_dim, self.hidden_dim)
+        self.st_temporal_proj = nn.Linear(self.hidden_dim, self.hidden_dim)
+        self.st_metadata_proj = nn.Linear(self.hidden_dim * 3, self.hidden_dim)
+        self.st_graph_proj = nn.Linear(self.hidden_dim, self.hidden_dim)
+        self.st_cpr_gate = nn.Linear(self.hidden_dim, self.hidden_dim)
+        self.st_delay_gates = nn.Parameter(torch.zeros(self.max_delay_steps))
+        self.st_score_weights = nn.ParameterDict(
+            {
+                "S_s": nn.Parameter(torch.tensor(0.0)),
+                "S_t": nn.Parameter(torch.tensor(0.0)),
+                "S_d": nn.Parameter(torch.tensor(0.0)),
+            }
+        )
+        self.st_temporal_queries = nn.Parameter(torch.empty(self.max_patches, self.hidden_dim))
+        self.st_latent_prototypes = nn.Parameter(torch.empty(self.num_prototypes, self.hidden_dim))
 
         self.blocks = nn.ModuleList(
             [
@@ -99,6 +132,20 @@ class FactoSTFoundationModel(nn.Module):
         if pretrained_path:
             load_weights(self, pretrained_path, strict=strict_load)
 
+    def load_backbone_weights(self, path: str, strict: bool = False) -> tuple[list[str], list[str]]:
+        """Load the shared UTP backbone while leaving STA-only parameters untouched."""
+
+        return load_filtered_weights(
+            self,
+            path,
+            strict=strict,
+            exclude_prefixes=(
+                "prompt_",
+                "metadata_gate.",
+                "st_",
+            ),
+        )
+
     def reset_parameters(self) -> None:
         nn.init.trunc_normal_(self.patch_pos, std=0.02)
         nn.init.normal_(self.node_emb.weight, std=0.02)
@@ -106,6 +153,20 @@ class FactoSTFoundationModel(nn.Module):
         nn.init.normal_(self.prompt_v, std=0.02)
         nn.init.xavier_uniform_(self.prompt_adapter.weight)
         nn.init.zeros_(self.prompt_adapter.bias)
+        nn.init.xavier_uniform_(self.st_node_proj.weight)
+        nn.init.zeros_(self.st_node_proj.bias)
+        nn.init.xavier_uniform_(self.st_channel_proj.weight)
+        nn.init.zeros_(self.st_channel_proj.bias)
+        nn.init.xavier_uniform_(self.st_temporal_proj.weight)
+        nn.init.zeros_(self.st_temporal_proj.bias)
+        nn.init.xavier_uniform_(self.st_metadata_proj.weight)
+        nn.init.zeros_(self.st_metadata_proj.bias)
+        nn.init.xavier_uniform_(self.st_graph_proj.weight)
+        nn.init.zeros_(self.st_graph_proj.bias)
+        nn.init.xavier_uniform_(self.st_cpr_gate.weight)
+        nn.init.zeros_(self.st_cpr_gate.bias)
+        nn.init.trunc_normal_(self.st_temporal_queries, std=0.02)
+        nn.init.trunc_normal_(self.st_latent_prototypes, std=0.02)
 
     def _patch(self, x: torch.Tensor) -> tuple[torch.Tensor, int, int]:
         x = ensure_4d(x)
@@ -125,13 +186,107 @@ class FactoSTFoundationModel(nn.Module):
             raise ValueError(f"num_patches={num_patches} exceeds max_patches={self.max_patches}")
         return patches.contiguous(), padded_steps, pad_len
 
+    def _st_metadata_fusion(
+        self,
+        tokens: torch.Tensor,
+        graph: Optional[torch.Tensor],
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        batch, nodes, channels, num_patches, _ = tokens.shape
+        node_ids = torch.arange(nodes, device=tokens.device)
+        channel_ids = torch.arange(channels, device=tokens.device)
+
+        node_context = self.st_node_proj(self.node_emb(node_ids)).view(1, nodes, 1, 1, self.hidden_dim)
+        channel_context = self.st_channel_proj(self.channel_emb(channel_ids)).view(
+            1, 1, channels, 1, self.hidden_dim
+        )
+        temporal_context = self.st_temporal_proj(self.patch_pos[:, :num_patches]).view(
+            1, 1, 1, num_patches, self.hidden_dim
+        )
+        metadata = torch.cat(
+            [
+                node_context.expand(batch, -1, channels, num_patches, -1),
+                channel_context.expand(batch, nodes, -1, num_patches, -1),
+                temporal_context.expand(batch, nodes, channels, -1, -1),
+            ],
+            dim=-1,
+        )
+        fused = self.st_metadata_proj(metadata)
+
+        graph_context = torch.zeros_like(tokens)
+        if graph is not None:
+            adj = normalize_adjacency(graph, nodes, tokens.device, tokens.dtype)
+            graph_context = torch.einsum("ij,bjcpd->bicpd", adj, tokens)
+            graph_context = self.st_graph_proj(graph_context)
+            fused = fused + graph_context
+
+        return fused, {
+            "node": node_context,
+            "channel": channel_context,
+            "temporal": temporal_context,
+            "graph": graph_context,
+        }
+
+    def _cyclic_prototype_refinement(self, tokens: torch.Tensor) -> torch.Tensor:
+        batch, nodes, channels, num_patches, _ = tokens.shape
+        query = self.st_temporal_queries[:num_patches].view(1, 1, 1, num_patches, self.hidden_dim)
+        proto_logits = torch.einsum(
+            "bncpd,md->bncpm",
+            tokens + query.expand(batch, nodes, channels, -1, -1),
+            self.st_latent_prototypes,
+        )
+        proto_weights = F.softmax(proto_logits, dim=-1)
+        prototype_update = torch.einsum("bncpm,md->bncpd", proto_weights, self.st_latent_prototypes)
+        gate = torch.sigmoid(self.st_cpr_gate(tokens + query))
+        return tokens + gate * prototype_update
+
+    def _st_filter(
+        self,
+        tokens: torch.Tensor,
+        contexts: dict[str, torch.Tensor],
+    ) -> torch.Tensor:
+        scores = []
+        weights = []
+
+        if "S_s" in self.filter_matrices:
+            spatial_reference = contexts["node"] + contexts["graph"]
+            spatial_score = (tokens * spatial_reference).sum(dim=-1)
+            scores.append(spatial_score)
+            weights.append(self.st_score_weights["S_s"])
+
+        if "S_t" in self.filter_matrices:
+            temporal_reference = contexts["temporal"] + contexts["channel"]
+            temporal_score = (tokens * temporal_reference).sum(dim=-1)
+            scores.append(temporal_score)
+            weights.append(self.st_score_weights["S_t"])
+
+        if "S_d" in self.filter_matrices:
+            delay_score = torch.zeros_like(tokens[..., 0])
+            max_lag = min(self.max_delay_steps, tokens.shape[3])
+            lag_weights = F.softplus(self.st_delay_gates[:max_lag])
+            for lag in range(1, max_lag + 1):
+                lagged = torch.zeros_like(tokens)
+                lagged[:, :, :, lag:, :] = tokens[:, :, :, :-lag, :]
+                proto_logits = torch.einsum("bncpd,md->bncpm", lagged, self.st_latent_prototypes)
+                proto_weights = F.softmax(proto_logits, dim=-1)
+                lagged_proto = torch.einsum("bncpm,md->bncpd", proto_weights, self.st_latent_prototypes)
+                delay_score = delay_score + lag_weights[lag - 1] * (tokens * lagged_proto).sum(dim=-1)
+            scores.append(delay_score)
+            weights.append(self.st_score_weights["S_d"])
+
+        if not scores:
+            return tokens
+
+        normalized_weights = F.softmax(torch.stack(weights), dim=0)
+        fused_score = sum(weight * score for weight, score in zip(normalized_weights, scores))
+        gate = torch.sigmoid(fused_score).unsqueeze(-1)
+        return tokens * (1.0 + gate)
+
     def encode(
         self,
         x: torch.Tensor,
         graph: Optional[torch.Tensor] = None,
         mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        del graph
         if mask is not None:
             x = torch.where(mask.bool(), torch.zeros_like(x), x)
         patches, _, _ = self._patch(x)
@@ -161,10 +316,18 @@ class FactoSTFoundationModel(nn.Module):
             tokens = tokens[:, self.num_prompt_tokens :]
 
         tokens = self.norm(tokens)
+        tokens = tokens.reshape(batch, nodes, channels, num_patches, self.hidden_dim)
+        if self.use_st_metadata:
+            fused_context, contexts = self._st_metadata_fusion(tokens, graph)
+            tokens = tokens + fused_context
+            if self.use_cpr:
+                tokens = self._cyclic_prototype_refinement(tokens)
+            if self.use_st_filtering:
+                tokens = self._st_filter(tokens, contexts)
         if self.use_st_adapter:
             gate = self.metadata_gate(tokens)
             tokens = tokens * (1.0 + gate)
-        return tokens.reshape(batch, nodes, channels, num_patches, self.hidden_dim)
+        return tokens
 
     def _embedding_grid(self, encoded: torch.Tensor) -> torch.Tensor:
         # [B, N, C, P, D] -> [B, P, N, D]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 import fnmatch
 import json
 from datetime import datetime
@@ -47,10 +48,26 @@ class MultiStageTrainer:
         self.device = self._resolve_device(device)
         self.datamodule = None
         self.model: Optional[torch.nn.Module] = None
+        self.base_data_cfg = dict(cfg["data"])
+        self.base_model_cfg = dict(cfg["model"])
+        self._current_data_cfg: Optional[Dict[str, Any]] = None
+        self._current_model_cfg: Optional[Dict[str, Any]] = None
+        self._stage_data_recipes = self._compile_stage_recipes(
+            base_cfg=self.base_data_cfg,
+            attr_name="data",
+            reset_attr="reset_data",
+        )
+        self._stage_model_recipes = self._compile_stage_recipes(
+            base_cfg=self.base_model_cfg,
+            attr_name="model",
+            reset_attr="reset_model",
+        )
+        self.artifacts: Dict[str, str] = {}
         self.last_checkpoint: Optional[str] = None
         self._resume_checkpoint: Optional[str] = None
         self._resume_metadata: Dict[str, Any] = {}
         self._resume_consumed = False
+        self.stage_results: list[Dict[str, Any]] = []
 
     def run(self) -> None:
         seed_everything(int(self.cfg.get("seed", 42)))
@@ -73,18 +90,14 @@ class MultiStageTrainer:
 
     def setup(self) -> None:
         self.work_dir.mkdir(parents=True, exist_ok=True)
+        (self.work_dir / "results").mkdir(parents=True, exist_ok=True)
         self.logger.info("Work directory: %s", self.work_dir)
-        self.datamodule = DATAMODULES.build(self.cfg["data"])
-        self.datamodule.setup()
-        model_cfg = self._resolve_model_config(dict(self.cfg["model"]))
-        self.model = MODELS.build(model_cfg).to(self.device)
-        self.logger.info("Model: %s", self.model.__class__.__name__)
-        self.logger.info("Resolved model config: %s", json.dumps(model_cfg, sort_keys=True))
         self.logger.info("Device: %s", self.device)
 
     def run_stage(self, stage: StageSpec, stage_index: int = 0) -> None:
+        self._prepare_stage_components(stage, stage_index)
         if self.model is None or self.datamodule is None:
-            raise RuntimeError("Trainer.setup must run before run_stage")
+            raise RuntimeError("Stage components are not initialized")
 
         suffix = " [eval-only]" if stage.eval_only else ""
         self.logger.info(
@@ -108,16 +121,17 @@ class MultiStageTrainer:
         start_epoch = 1
         best_score = float("inf")
         resumed_this_stage = False
+        train_logs: Optional[Dict[str, float]] = None
+        val_logs: Optional[Dict[str, float]] = None
 
         if self._should_resume_stage(stage, stage_index):
             ckpt_path = str(self._resume_checkpoint)
-            info = load_checkpoint(
+            info = self._load_stage_weights(
                 ckpt_path,
-                self.model,
+                stage=stage,
                 optimizer=optimizer,
                 scheduler=scheduler,
                 strict=self.resume_strict,
-                map_location=str(self.device),
                 restore_rng=True,
             )
             extra = info.get("extra", {})
@@ -137,15 +151,16 @@ class MultiStageTrainer:
 
         if stage.load_from and not resumed_this_stage:
             ckpt_path = self._resolve_checkpoint_reference(stage.load_from)
-            info = load_checkpoint(
+            info = self._load_stage_weights(
                 ckpt_path,
-                self.model,
+                stage=stage,
                 strict=stage.strict_load,
-                map_location=str(self.device),
+                restore_rng=False,
             )
             self.logger.info(
-                "Loaded checkpoint %s (missing=%s unexpected=%s)",
+                "Loaded stage weights from %s with method=%s (missing=%s unexpected=%s)",
                 ckpt_path,
+                stage.load_method,
                 info["missing_keys"],
                 info["unexpected_keys"],
             )
@@ -181,6 +196,14 @@ class MultiStageTrainer:
                 "Finished eval-only stage %s: %s",
                 stage.name,
                 self._format_logs(test_logs),
+            )
+            self._record_stage_result(
+                stage=stage,
+                stage_index=stage_index,
+                train_logs=None,
+                val_logs=val_logs,
+                test_logs=test_logs,
+                best_score=None,
             )
             return
 
@@ -326,6 +349,14 @@ class MultiStageTrainer:
             prefix="test",
         )
         self.logger.info("Finished stage %s: %s", stage.name, self._format_logs(test_logs))
+        self._record_stage_result(
+            stage=stage,
+            stage_index=stage_index,
+            train_logs=train_logs,
+            val_logs=val_logs,
+            test_logs=test_logs,
+            best_score=best_score,
+        )
 
     def _run_loader(
         self,
@@ -395,11 +426,119 @@ class MultiStageTrainer:
             return self.datamodule.train_dataloader()
         return self.datamodule.train_dataloader(**kwargs)
 
+    def _prepare_stage_components(self, stage: StageSpec, stage_index: int) -> None:
+        data_cfg = self._compose_stage_data_config(stage_index)
+        if self.datamodule is None or self._current_data_cfg != data_cfg:
+            self.datamodule = DATAMODULES.build(data_cfg)
+            self.datamodule.setup()
+            self._current_data_cfg = deepcopy(data_cfg)
+            self.logger.info(
+                "Stage %s data config: %s",
+                stage.name,
+                json.dumps(data_cfg, sort_keys=True),
+            )
+
+        model_cfg = self._compose_stage_model_config(stage_index)
+        if self.model is None or self._current_model_cfg != model_cfg:
+            self.model = MODELS.build(model_cfg).to(self.device)
+            self._current_model_cfg = deepcopy(model_cfg)
+            self.logger.info("Model: %s", self.model.__class__.__name__)
+            self.logger.info("Resolved model config: %s", json.dumps(model_cfg, sort_keys=True))
+
+    def _compose_stage_data_config(self, stage_index: int) -> Dict[str, Any]:
+        return deepcopy(self._stage_data_recipes[stage_index])
+
+    def _compose_stage_model_config(self, stage_index: int) -> Dict[str, Any]:
+        return self._resolve_model_config(deepcopy(self._stage_model_recipes[stage_index]))
+
+    def _compile_stage_recipes(
+        self,
+        base_cfg: Dict[str, Any],
+        attr_name: str,
+        reset_attr: str,
+    ) -> list[Dict[str, Any]]:
+        recipes: list[Dict[str, Any]] = []
+        current = deepcopy(base_cfg)
+        for stage in self.plan.stages:
+            override = getattr(stage, attr_name)
+            reset_requested = bool(getattr(stage, reset_attr))
+            if reset_requested:
+                current = deepcopy(base_cfg)
+            elif recipes:
+                current = deepcopy(recipes[-1])
+            else:
+                current = deepcopy(base_cfg)
+
+            if (
+                override is not None
+                and "type" in override
+                and current.get("type") not in {None, override["type"]}
+                and not reset_requested
+            ):
+                raise ValueError(
+                    f"Stage {stage.name!r} changes {attr_name} type from "
+                    f"{current.get('type')!r} to {override['type']!r}. "
+                    f"Set {reset_attr}: true to start from a fresh recipe."
+                )
+
+            if override is not None:
+                current = _merge_dicts(current, override)
+            recipes.append(deepcopy(current))
+        return recipes
+
+    def _load_stage_weights(
+        self,
+        path: str,
+        stage: StageSpec,
+        optimizer: Optional[torch.optim.Optimizer] = None,
+        scheduler: Optional[Any] = None,
+        strict: bool = True,
+        restore_rng: bool = False,
+    ) -> Dict[str, Any]:
+        if self.model is None:
+            raise RuntimeError("Model is not initialized")
+
+        if stage.load_method in {"checkpoint", "state_dict"}:
+            return load_checkpoint(
+                path,
+                self.model,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                strict=strict,
+                map_location=str(self.device),
+                restore_rng=restore_rng,
+            )
+
+        loader = getattr(self.model, stage.load_method, None)
+        if loader is None:
+            raise AttributeError(
+                f"Model {self.model.__class__.__name__} has no load method {stage.load_method!r}"
+            )
+        try:
+            result = loader(path, strict=strict)
+        except TypeError:
+            result = loader(path)
+
+        info = {
+            "missing_keys": [],
+            "unexpected_keys": [],
+            "extra": read_checkpoint_metadata(path, map_location="cpu"),
+        }
+        if isinstance(result, tuple) and len(result) == 2:
+            info["missing_keys"] = list(result[0])
+            info["unexpected_keys"] = list(result[1])
+        elif isinstance(result, dict):
+            info["missing_keys"] = list(result.get("missing_keys", []))
+            info["unexpected_keys"] = list(result.get("unexpected_keys", []))
+            if "extra" in result:
+                info["extra"] = dict(result["extra"])
+        return info
+
     def _apply_trainability(self, stage: StageSpec) -> None:
         if self.model is None:
             raise RuntimeError("Model is not initialized")
-        if not stage.freeze and not stage.unfreeze:
-            return
+        for param in self.model.parameters():
+            param.requires_grad = True
         for name, param in self.model.named_parameters():
             if _matches_any(name, stage.freeze):
                 param.requires_grad = False
@@ -416,6 +555,16 @@ class MultiStageTrainer:
                     "stage.load_from='previous' requested before any checkpoint exists"
                 )
             return self.last_checkpoint
+        if reference in self.artifacts:
+            return self.artifacts[reference]
+        candidate = Path(reference)
+        if candidate.exists():
+            return str(candidate)
+        checkpoint_dir = self.work_dir / "checkpoints"
+        for suffix in ("_last.pt", "_best.pt", ".pt"):
+            resolved = checkpoint_dir / f"{reference}{suffix}"
+            if resolved.exists():
+                return str(resolved)
         return reference
 
     def _resolve_model_config(self, model_cfg: Dict[str, Any]) -> Dict[str, Any]:
@@ -449,7 +598,14 @@ class MultiStageTrainer:
         if not path.exists():
             raise FileNotFoundError(path)
         self._resume_checkpoint = str(path)
+        self._load_stage_results()
         self._resume_metadata = read_checkpoint_metadata(str(path), map_location="cpu")
+        stage_name = self._resume_metadata.get("stage")
+        if stage_name:
+            self.artifacts[str(stage_name)] = str(path)
+        save_artifact = self._resume_metadata.get("save_artifact")
+        if save_artifact:
+            self.artifacts[str(save_artifact)] = str(path)
         self.logger.info("Resume checkpoint selected: %s", path)
 
     def _resume_stage_index(self) -> Optional[int]:
@@ -498,6 +654,7 @@ class MultiStageTrainer:
             "best_score": best_score,
             "tag": tag,
             "work_dir": str(self.work_dir),
+            "save_artifact": stage.save_artifact,
         }
         save_checkpoint(
             str(path),
@@ -507,7 +664,85 @@ class MultiStageTrainer:
             extra=extra,
         )
         self.last_checkpoint = str(path)
+        if tag == "last":
+            self.artifacts[stage.name] = str(path)
+            if stage.save_artifact:
+                self.artifacts[stage.save_artifact] = str(path)
         self.logger.info("Checkpoint %s saved", path)
+
+    def _record_stage_result(
+        self,
+        stage: StageSpec,
+        stage_index: int,
+        train_logs: Optional[Dict[str, float]],
+        val_logs: Optional[Dict[str, float]],
+        test_logs: Optional[Dict[str, float]],
+        best_score: Optional[float],
+    ) -> None:
+        result = {
+            "name": stage.name,
+            "stage_index": stage_index,
+            "task": stage.task.get("type"),
+            "model_type": None if self._current_model_cfg is None else self._current_model_cfg.get("type"),
+            "data_type": None if self._current_data_cfg is None else self._current_data_cfg.get("type"),
+            "epochs": stage.epochs,
+            "eval_only": stage.eval_only,
+            "load_from": stage.load_from,
+            "load_method": stage.load_method,
+            "save_artifact": stage.save_artifact,
+            "freeze": list(stage.freeze),
+            "unfreeze": list(stage.unfreeze),
+            "train_fraction": (
+                stage.train_fraction if stage.train_fraction is not None else stage.few_shot_ratio
+            ),
+            "train_windows": (
+                stage.train_windows if stage.train_windows is not None else stage.few_shot_windows
+            ),
+            "best_score": None if best_score is None or best_score == float("inf") else float(best_score),
+            "checkpoint": self.last_checkpoint,
+            "resolved_model": deepcopy(self._current_model_cfg) if self._current_model_cfg else None,
+            "resolved_data": deepcopy(self._current_data_cfg) if self._current_data_cfg else None,
+            "train": None if train_logs is None else {k: float(v) for k, v in train_logs.items()},
+            "val": None if val_logs is None else {k: float(v) for k, v in val_logs.items()},
+            "test": None if test_logs is None else {k: float(v) for k, v in test_logs.items()},
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
+        }
+        for index, item in enumerate(self.stage_results):
+            if item.get("name") == stage.name:
+                self.stage_results[index] = result
+                break
+        else:
+            self.stage_results.append(result)
+        self._write_stage_results()
+
+    def _stage_results_path(self) -> Path:
+        return self.work_dir / "results" / "stage_results.json"
+
+    def _load_stage_results(self) -> None:
+        path = self._stage_results_path()
+        if not path.exists():
+            return
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            self.logger.warning("Could not parse existing stage results file: %s", path)
+            return
+        if isinstance(payload, dict) and isinstance(payload.get("stages"), list):
+            self.stage_results = list(payload["stages"])
+        elif isinstance(payload, list):
+            self.stage_results = list(payload)
+
+    def _write_stage_results(self) -> None:
+        payload = {
+            "experiment_name": str(self.cfg.get("experiment_name", "basicstfm_experiment")),
+            "work_dir": str(self.work_dir),
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
+            "stages": self.stage_results,
+        }
+        self._stage_results_path().write_text(
+            json.dumps(payload, indent=2, sort_keys=False),
+            encoding="utf-8",
+        )
 
     def _resolve_device(self, device: str) -> torch.device:
         if device == "auto":
@@ -536,3 +771,13 @@ def _matches_any(name: str, patterns: Iterable[str]) -> bool:
 
 def _is_auto(value: Any) -> bool:
     return value is None or (isinstance(value, str) and value.lower() == "auto")
+
+
+def _merge_dicts(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+    merged = deepcopy(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _merge_dicts(merged[key], value)
+        else:
+            merged[key] = deepcopy(value)
+    return merged

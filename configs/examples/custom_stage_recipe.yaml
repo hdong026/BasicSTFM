@@ -1,91 +1,90 @@
-experiment_name: opencity_foundation_transfer
+experiment_name: custom_stage_recipe_demo
 seed: 42
+
+custom_imports:
+  - examples.custom_task
+  - examples.custom_loss
 
 trainer:
   type: MultiStageTrainer
   device: auto
-  work_dir: runs/opencity_foundation_transfer
-  log_every: 50
+  work_dir: runs/custom_stage_recipe_demo
+  log_every: 20
 
 data:
-  type: WindowDataModule
-  data_path: data/METR-LA/data.npz
-  graph_path: data/METR-LA/adj.npz
+  type: SyntheticDataModule
+  num_timesteps: 480
+  num_nodes: 16
+  num_channels: 1
   input_len: 12
-  output_len: 12
-  batch_size: 32
+  output_len: 6
+  batch_size: 16
   split: [0.7, 0.1, 0.2]
   scaler:
     type: standard
 
 model:
-  type: OpenCityFoundationModel
+  type: TinySTFoundationModel
   num_nodes: auto
   input_dim: auto
   output_dim: auto
   input_len: auto
   output_len: auto
-  hidden_dim: 128
-  num_layers: 4
+  hidden_dim: 64
+  num_layers: 2
   num_heads: 4
-  ffn_dim: 256
-  dropout: 0.1
+  ffn_dim: 128
 
 pipeline:
   stages:
-    - name: graph_temporal_pretrain
-      save_artifact: opencity_pretrain
-      epochs: 5
+    - name: masked_pretrain
+      save_artifact: synthetic_backbone
+      epochs: 2
       task:
-        type: ForecastingTask
+        type: MaskedReconstructionTask
+        mask_ratio: 0.4
       losses:
-        - type: mae
-          weight: 1.0
         - type: mse
-          weight: 0.05
       metrics:
         - type: mae
-        - type: rmse
       optimizer:
         type: AdamW
         lr: 0.001
         weight_decay: 0.0001
       scheduler:
         type: CosineAnnealingLR
-        T_max: 5
+        T_max: 2
       validate_every: 1
       gradient_clip_val: 5.0
 
-    - name: zero_shot_test
+    - name: zero_shot_eval
       eval_only: true
       epochs: 0
-      load_from: opencity_pretrain
-      strict_load: true
+      load_from: synthetic_backbone
       task:
         type: ForecastingTask
-        model_mode: zero_shot
       losses:
         - type: mae
       metrics:
         - type: mae
         - type: rmse
 
-    - name: efficient_head_tuning
-      epochs: 3
-      load_from: opencity_pretrain
-      strict_load: true
-      few_shot_ratio: 0.05
+    - name: aux_penalty_finetune
+      epochs: 2
+      load_from: synthetic_backbone
+      few_shot_ratio: 0.1
       freeze:
         - all
       unfreeze:
         - forecast_head.*
       task:
-        type: ForecastingTask
+        type: ForecastWithAuxEmbeddingPenalty
+        penalty_weight: 0.0001
       losses:
-        - type: mae
+        - type: smooth_l1_mae_mix
+          alpha: 0.6
+          beta: 1.0
           weight: 1.0
-        - type: mse
-          weight: 0.05
       metrics:
         - type: mae
         - type: rmse
@@ -95,6 +94,6 @@ pipeline:
         weight_decay: 0.0001
       scheduler:
         type: CosineAnnealingLR
-        T_max: 3
+        T_max: 2
       validate_every: 1
       gradient_clip_val: 5.0
