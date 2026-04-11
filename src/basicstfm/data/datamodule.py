@@ -157,11 +157,13 @@ class WindowDataModule:
         world_size: int = 1,
         rank: int = 0,
         seed: int = 42,
+        name: Optional[str] = None,
     ) -> None:
         if output_len is not None:
             target_len = output_len
         if target_len is None:
             raise ValueError("WindowDataModule requires target_len or output_len")
+        self.name = None if name is None else str(name)
         self.data_path = data_path
         self.input_key = input_key
         self.graph_path = graph_path
@@ -345,6 +347,7 @@ class WindowDataModule:
             raise RuntimeError("DataModule metadata is unavailable before setup")
         _, num_nodes, num_channels = self.data_shape
         return {
+            "dataset_name": self.name,
             "data_shape": self.data_shape,
             "num_nodes": num_nodes,
             "num_channels": num_channels,
