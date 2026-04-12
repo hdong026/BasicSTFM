@@ -1,76 +1,51 @@
-experiment_name: opencity_multisource_benchmark
+experiment_name: opencity_traffic_benchmark
 seed: 42
 
 trainer:
   type: MultiStageTrainer
   device: auto
-  work_dir: runs/opencity_multisource_benchmark
+  work_dir: runs/opencity_traffic_benchmark
   log_every: 50
 
 dataset_registry:
-  METR-LA: &metr_la
+  METR-LA:
     name: METR-LA
     data_path: data/METR-LA/data.npz
     graph_path: data/METR-LA/adj.npz
     batch_size: 12
-  PEMS-BAY: &pems_bay
+  PEMS-BAY:
     name: PEMS-BAY
     data_path: data/PEMS-BAY/data.npz
     graph_path: data/PEMS-BAY/adj.npz
     batch_size: 6
-  PEMS04: &pems04
+  PEMS04:
     name: PEMS04
     data_path: data/PEMS04/data.npz
     graph_path: data/PEMS04/adj.npz
     batch_size: 8
-  PEMS07: &pems07
+  PEMS07:
     name: PEMS07
     data_path: data/PEMS07/data.npz
     graph_path: data/PEMS07/adj.npz
     batch_size: 6
-  Rainfall_AUS: &rainfall_aus
-    name: Rainfall_AUS
-    data_path: data/Rainfall_AUS/data.npz
-    batch_size: 12
-  Rainfall_CN: &rainfall_cn
-    name: Rainfall_CN
-    data_path: data/Rainfall_CN/data.npz
-    batch_size: 12
-  Rainfall_SA: &rainfall_sa
-    name: Rainfall_SA
-    data_path: data/Rainfall_SA/data.npz
-    batch_size: 12
-  PEMS08: &pems08
+  PEMS08:
     name: PEMS08
     data_path: data/PEMS08/data.npz
     graph_path: data/PEMS08/adj.npz
     batch_size: 8
-  Rainfall_UK: &rainfall_uk
-    name: Rainfall_UK
-    data_path: data/Rainfall_UK/data.npz
-    batch_size: 12
-  Rainfall_USA: &rainfall_usa
-    name: Rainfall_USA
-    data_path: data/Rainfall_USA/data.npz
-    batch_size: 12
 
 dataset_groups:
   benchmark_sources:
-    - METR-LA
     - PEMS-BAY
     - PEMS04
     - PEMS07
-    - Rainfall_AUS
-    - Rainfall_CN
-    - Rainfall_SA
   held_out_targets:
+    - METR-LA
     - PEMS08
-    - Rainfall_UK
-    - Rainfall_USA
 
 data:
   type: WindowDataModule
-  dataset_key: PEMS08
+  dataset_key: METR-LA
   input_len: 12
   output_len: 12
   batch_size: 16
@@ -128,6 +103,69 @@ pipeline:
       validate_every: 1
       gradient_clip_val: 5.0
 
+    - name: metr_la_zero_shot
+      eval_only: true
+      epochs: 0
+      reset_data: true
+      data:
+        type: WindowDataModule
+        dataset_key: METR-LA
+        input_len: 12
+        output_len: 12
+        batch_size: 16
+        split: [0.7, 0.1, 0.2]
+        scaler:
+          type: standard
+      load_from: opencity_multisource_pretrain
+      strict_load: true
+      task:
+        type: ForecastingTask
+        model_mode: zero_shot
+      losses:
+        - type: mae
+      metrics:
+        - type: mae
+        - type: rmse
+
+    - name: metr_la_five_percent_head_tuning
+      epochs: 3
+      reset_data: true
+      data:
+        type: WindowDataModule
+        dataset_key: METR-LA
+        input_len: 12
+        output_len: 12
+        batch_size: 16
+        split: [0.7, 0.1, 0.2]
+        scaler:
+          type: standard
+      load_from: opencity_multisource_pretrain
+      strict_load: true
+      few_shot_ratio: 0.05
+      freeze:
+        - all
+      unfreeze:
+        - forecast_head.*
+      task:
+        type: ForecastingTask
+      losses:
+        - type: mae
+          weight: 1.0
+        - type: mse
+          weight: 0.05
+      metrics:
+        - type: mae
+        - type: rmse
+      optimizer:
+        type: AdamW
+        lr: 0.0005
+        weight_decay: 0.0001
+      scheduler:
+        type: CosineAnnealingLR
+        T_max: 3
+      validate_every: 1
+      gradient_clip_val: 5.0
+
     - name: pems08_zero_shot
       eval_only: true
       epochs: 0
@@ -158,132 +196,6 @@ pipeline:
       data:
         type: WindowDataModule
         dataset_key: PEMS08
-        input_len: 12
-        output_len: 12
-        batch_size: 16
-        split: [0.7, 0.1, 0.2]
-        scaler:
-          type: standard
-      load_from: opencity_multisource_pretrain
-      strict_load: true
-      few_shot_ratio: 0.05
-      freeze:
-        - all
-      unfreeze:
-        - forecast_head.*
-      task:
-        type: ForecastingTask
-      losses:
-        - type: mae
-          weight: 1.0
-        - type: mse
-          weight: 0.05
-      metrics:
-        - type: mae
-        - type: rmse
-      optimizer:
-        type: AdamW
-        lr: 0.0005
-        weight_decay: 0.0001
-      scheduler:
-        type: CosineAnnealingLR
-        T_max: 3
-      validate_every: 1
-      gradient_clip_val: 5.0
-
-    - name: rainfall_uk_zero_shot
-      eval_only: true
-      epochs: 0
-      reset_data: true
-      data:
-        type: WindowDataModule
-        dataset_key: Rainfall_UK
-        input_len: 12
-        output_len: 12
-        batch_size: 16
-        split: [0.7, 0.1, 0.2]
-        scaler:
-          type: standard
-      load_from: opencity_multisource_pretrain
-      strict_load: true
-      task:
-        type: ForecastingTask
-        model_mode: zero_shot
-      losses:
-        - type: mae
-      metrics:
-        - type: mae
-        - type: rmse
-
-    - name: rainfall_uk_five_percent_head_tuning
-      epochs: 3
-      reset_data: true
-      data:
-        type: WindowDataModule
-        dataset_key: Rainfall_UK
-        input_len: 12
-        output_len: 12
-        batch_size: 16
-        split: [0.7, 0.1, 0.2]
-        scaler:
-          type: standard
-      load_from: opencity_multisource_pretrain
-      strict_load: true
-      few_shot_ratio: 0.05
-      freeze:
-        - all
-      unfreeze:
-        - forecast_head.*
-      task:
-        type: ForecastingTask
-      losses:
-        - type: mae
-          weight: 1.0
-        - type: mse
-          weight: 0.05
-      metrics:
-        - type: mae
-        - type: rmse
-      optimizer:
-        type: AdamW
-        lr: 0.0005
-        weight_decay: 0.0001
-      scheduler:
-        type: CosineAnnealingLR
-        T_max: 3
-      validate_every: 1
-      gradient_clip_val: 5.0
-
-    - name: rainfall_usa_zero_shot
-      eval_only: true
-      epochs: 0
-      reset_data: true
-      data:
-        type: WindowDataModule
-        dataset_key: Rainfall_USA
-        input_len: 12
-        output_len: 12
-        batch_size: 16
-        split: [0.7, 0.1, 0.2]
-        scaler:
-          type: standard
-      load_from: opencity_multisource_pretrain
-      strict_load: true
-      task:
-        type: ForecastingTask
-        model_mode: zero_shot
-      losses:
-        - type: mae
-      metrics:
-        - type: mae
-        - type: rmse
-
-    - name: rainfall_usa_five_percent_head_tuning
-      epochs: 3
-      reset_data: true
-      data:
-        type: WindowDataModule
-        dataset_key: Rainfall_USA
         input_len: 12
         output_len: 12
         batch_size: 16
