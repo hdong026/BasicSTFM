@@ -127,6 +127,7 @@ pipeline:
       strict_load: true
       model:
         use_st_adapter: false
+        output_dim: 1
       task:
         type: ForecastingTask
         model_mode: zero_shot
@@ -153,6 +154,7 @@ pipeline:
       strict_load: false
       model:
         use_st_adapter: true
+        output_dim: 1
       few_shot_ratio: 0.05
       freeze:
         - all
@@ -198,6 +200,7 @@ pipeline:
       strict_load: true
       model:
         use_st_adapter: false
+        output_dim: 1
       task:
         type: ForecastingTask
         model_mode: zero_shot
@@ -224,6 +227,7 @@ pipeline:
       strict_load: false
       model:
         use_st_adapter: true
+        output_dim: 1
       few_shot_ratio: 0.05
       freeze:
         - all
