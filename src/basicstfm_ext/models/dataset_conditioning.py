@@ -404,7 +404,9 @@ def _resolve_dataset_name(dataset_context: Optional[Mapping[str, Any]]) -> Optio
 def _resolve_mask(dataset_context: Optional[Mapping[str, Any]]) -> Optional[torch.Tensor]:
     if dataset_context is None:
         return None
-    value = dataset_context.get("x_mask") or dataset_context.get("mask")
+    value = dataset_context.get("x_mask")
+    if value is None:
+        value = dataset_context.get("mask")
     return None if value is None else value
 
 

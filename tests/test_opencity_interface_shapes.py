@@ -63,6 +63,7 @@ class OpenCityInterfaceShapeTest(unittest.TestCase):
         graph = torch.eye(5)
         dataset_context = {
             "dataset_name": "TARGET",
+            "x_mask": torch.ones_like(x, dtype=torch.bool),
             "metadata": {"target_len": 18},
         }
         for variant in ("A", "B", "C"):
