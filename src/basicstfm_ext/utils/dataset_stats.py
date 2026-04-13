@@ -174,7 +174,14 @@ def _graph_features(
 ) -> tuple[float, float, float]:
     if graph is None:
         return 0.0, 0.0, 0.0
-    adj = normalize_adjacency(graph, num_nodes, device, dtype, add_self_loops=False)
+    if graph.ndim != 2:
+        return 0.0, 0.0, 0.0
+    available_nodes = min(int(num_nodes), int(graph.shape[0]), int(graph.shape[1]))
+    if available_nodes <= 0:
+        return 0.0, 0.0, 0.0
+    if graph.shape[0] != available_nodes or graph.shape[1] != available_nodes:
+        graph = graph[:available_nodes, :available_nodes]
+    adj = normalize_adjacency(graph, available_nodes, device, dtype, add_self_loops=False)
     density = float((adj > 0).float().mean().item())
     avg_degree = float(adj.sum(dim=-1).mean().item())
     spectral_radius = _power_iteration_spectral_radius(adj)

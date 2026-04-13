@@ -11,6 +11,7 @@ import torch
 
 from basicstfm.builders import import_builtin_components, import_custom_modules
 from basicstfm.registry import MODELS
+from basicstfm_ext.utils.dataset_stats import compute_dataset_descriptor
 
 
 class OpenCityInterfaceShapeTest(unittest.TestCase):
@@ -85,6 +86,12 @@ class OpenCityInterfaceShapeTest(unittest.TestCase):
             dataset_context={"dataset_name": "TARGET", "metadata": {"target_len": 18}},
         )
         self.assertEqual(tuple(outputs["forecast"].shape), (2, 18, 5, 1))
+
+    def test_descriptor_handles_graph_larger_than_truncated_node_budget(self) -> None:
+        x = torch.randn(2, 24, 307, 1)
+        graph = torch.eye(307)
+        descriptor = compute_dataset_descriptor(x, graph=graph)
+        self.assertEqual(tuple(descriptor.shape), (15,))
 
 
 if __name__ == "__main__":
