@@ -1,11 +1,11 @@
-"""Structured result discovery and export helpers."""
+"""Structured result discovery, summarization, and benchmark visualization helpers."""
 
 from __future__ import annotations
 
 import csv
 import json
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 
 def discover_stage_result_files(roots: Sequence[str | Path]) -> List[Path]:
@@ -112,6 +112,117 @@ def summarize_stage_rows(
             item[metric] = row.get(metric)
         summary.append(item)
     return summary
+
+
+def infer_stage_regime(row: Mapping[str, Any]) -> str:
+    stage_name = str(row.get("stage_name") or "").lower()
+    train_fraction = row.get("train_fraction")
+    eval_only = bool(row.get("eval_only"))
+
+    if eval_only or "zero_shot" in stage_name:
+        return "zero_shot"
+    if train_fraction not in (None, "", 0, 0.0):
+        return "few_shot"
+    if any(
+        token in stage_name
+        for token in (
+            "few_shot",
+            "prompt_tuning",
+            "adapter",
+            "head_tuning",
+            "finetune",
+            "fine_tune",
+        )
+    ):
+        return "few_shot"
+    return "pretrain"
+
+
+def pretty_model_name(row: Mapping[str, Any]) -> str:
+    model_type = str(row.get("model_type") or "")
+    mapping = {
+        "OpenCityFoundationModel": "OpenCity",
+        "FactoSTFoundationModel": "FactoST",
+        "UniSTFoundationModel": "UniST",
+    }
+    if model_type in mapping:
+        return mapping[model_type]
+
+    experiment_name = str(row.get("experiment_name") or "").lower()
+    if "opencity" in experiment_name:
+        return "OpenCity"
+    if "factost" in experiment_name:
+        return "FactoST"
+    if "unist" in experiment_name:
+        return "UniST"
+    return model_type or "Unknown"
+
+
+def build_paper_summary(
+    rows: Sequence[Dict[str, Any]],
+    *,
+    split: str = "test",
+    metric: str = "metric/mae",
+    datasets: Optional[Sequence[str]] = None,
+    model_order: Optional[Sequence[str]] = None,
+) -> Tuple[List[str], List[Dict[str, Any]]]:
+    metric_key = normalize_metric_name(metric, split=split)
+    filtered = [dict(row) for row in rows if infer_stage_regime(row) in {"zero_shot", "few_shot"}]
+    if datasets is None:
+        dataset_names = []
+        for row in filtered:
+            dataset = row.get("dataset")
+            if dataset and dataset not in dataset_names:
+                dataset_names.append(str(dataset))
+    else:
+        dataset_names = [str(item) for item in datasets]
+
+    model_names = [pretty_model_name(row) for row in filtered]
+    if model_order is None:
+        ordered_models = []
+        for name in model_names:
+            if name not in ordered_models:
+                ordered_models.append(name)
+    else:
+        ordered_models = [str(item) for item in model_order if str(item) in model_names]
+        for name in model_names:
+            if name not in ordered_models:
+                ordered_models.append(name)
+
+    value_map: Dict[Tuple[str, str, str], Optional[float]] = {}
+    for row in filtered:
+        model = pretty_model_name(row)
+        dataset = row.get("dataset")
+        if dataset not in dataset_names:
+            continue
+        regime = infer_stage_regime(row)
+        value = row.get(metric_key)
+        value_map[(model, str(dataset), regime)] = None if value is None else float(value)
+
+    summary: List[Dict[str, Any]] = []
+    for model in ordered_models:
+        item: Dict[str, Any] = {"Model": model}
+        zs_values: List[float] = []
+        fs_values: List[float] = []
+        gains: List[float] = []
+        for dataset in dataset_names:
+            zs = value_map.get((model, dataset, "zero_shot"))
+            fs = value_map.get((model, dataset, "few_shot"))
+            gain = None if zs is None or fs is None else float(zs) - float(fs)
+            item[f"{dataset} ZS"] = zs
+            item[f"{dataset} FS"] = fs
+            item[f"{dataset} Gain"] = gain
+            if zs is not None:
+                zs_values.append(float(zs))
+            if fs is not None:
+                fs_values.append(float(fs))
+            if gain is not None:
+                gains.append(float(gain))
+        item["Avg ZS"] = None if not zs_values else sum(zs_values) / len(zs_values)
+        item["Avg FS"] = None if not fs_values else sum(fs_values) / len(fs_values)
+        item["Avg Gain"] = None if not gains else sum(gains) / len(gains)
+        summary.append(item)
+    return dataset_names, summary
 
 
 def normalize_metric_name(metric: str, split: str = "test") -> str:

@@ -7,10 +7,13 @@ from pathlib import Path
 
 from basicstfm.utils.results import (
     build_markdown_table,
+    build_paper_summary,
     discover_stage_result_files,
     filter_stage_rows,
     flatten_stage_results,
+    infer_stage_regime,
     load_stage_result_payload,
+    pretty_model_name,
     summarize_stage_rows,
 )
 
@@ -67,6 +70,63 @@ class ResultsExportTest(unittest.TestCase):
             self.assertIn("experiment_name", markdown)
             self.assertIn("test/metric/mae", markdown)
             self.assertIn("exp_a", markdown)
+
+    def test_paper_summary_groups_zero_and_few_shot_rows(self):
+        rows = [
+            {
+                "experiment_name": "opencity_traffic_benchmark",
+                "stage_name": "metr_la_zero_shot",
+                "dataset": "METR-LA",
+                "model_type": "OpenCityFoundationModel",
+                "eval_only": True,
+                "test/metric/mae": 6.0,
+            },
+            {
+                "experiment_name": "opencity_traffic_benchmark",
+                "stage_name": "metr_la_five_percent_head_tuning",
+                "dataset": "METR-LA",
+                "model_type": "OpenCityFoundationModel",
+                "train_fraction": 0.05,
+                "test/metric/mae": 5.0,
+            },
+            {
+                "experiment_name": "factost_traffic_benchmark_12x12",
+                "stage_name": "pems08_zero_shot",
+                "dataset": "PEMS08",
+                "model_type": "FactoSTFoundationModel",
+                "eval_only": True,
+                "test/metric/mae": 20.0,
+            },
+            {
+                "experiment_name": "factost_traffic_benchmark_12x12",
+                "stage_name": "pems08_five_percent_factorized_adapter",
+                "dataset": "PEMS08",
+                "model_type": "FactoSTFoundationModel",
+                "train_fraction": 0.05,
+                "test/metric/mae": 12.0,
+            },
+        ]
+
+        self.assertEqual(infer_stage_regime(rows[0]), "zero_shot")
+        self.assertEqual(infer_stage_regime(rows[1]), "few_shot")
+        self.assertEqual(pretty_model_name(rows[0]), "OpenCity")
+
+        datasets, summary = build_paper_summary(
+            rows,
+            split="test",
+            metric="metric/mae",
+            datasets=["METR-LA", "PEMS08"],
+            model_order=["OpenCity", "FactoST"],
+        )
+        self.assertEqual(datasets, ["METR-LA", "PEMS08"])
+        self.assertEqual(summary[0]["Model"], "OpenCity")
+        self.assertEqual(summary[0]["METR-LA ZS"], 6.0)
+        self.assertEqual(summary[0]["METR-LA FS"], 5.0)
+        self.assertEqual(summary[0]["METR-LA Gain"], 1.0)
+        self.assertEqual(summary[1]["Model"], "FactoST")
+        self.assertEqual(summary[1]["PEMS08 ZS"], 20.0)
+        self.assertEqual(summary[1]["PEMS08 FS"], 12.0)
+        self.assertEqual(summary[1]["PEMS08 Gain"], 8.0)
 
 
 if __name__ == "__main__":
