@@ -180,6 +180,55 @@ class OpenCityInterfaceShapeTest(unittest.TestCase):
         )
         self.assertEqual(tuple(outputs["forecast"].shape), (2, 18, 5, 3))
 
+    def test_matched_length_hyper_head_can_start_close_to_backbone(self) -> None:
+        model = MODELS.build(
+            {
+                "type": "OpenCityVariableInterfaceWrapper",
+                "num_nodes": 5,
+                "input_dim": 1,
+                "output_dim": 1,
+                "input_len": 12,
+                "output_len": 12,
+                "backbone_cfg": {
+                    "input_len": 12,
+                    "output_len": 12,
+                    "hidden_dim": 16,
+                    "num_layers": 1,
+                    "num_heads": 4,
+                    "ffn_dim": 32,
+                    "dropout": 0.0,
+                },
+                "interface_cfg": {
+                    "variant": "B",
+                    "head_type": "gru",
+                    "hidden_dim": 12,
+                    "bottleneck_dim": 6,
+                    "residual_identity": True,
+                    "input_residual_scale_init": 0.0,
+                    "output_residual_scale_init": 0.0,
+                },
+                "conditioning_cfg": {
+                    "embedding_dim": 16,
+                    "stats_hidden_dim": 24,
+                    "rank": 4,
+                },
+                "distill_cfg": {
+                    "lambda_distill_matched": 1.0,
+                    "lambda_identity_in": 1.0,
+                    "lambda_identity_out": 1.0,
+                },
+            }
+        )
+        outputs = model(
+            torch.randn(2, 12, 5, 1),
+            graph=torch.eye(5),
+            dataset_context={"dataset_name": "TARGET", "metadata": {"target_len": 12}},
+        )
+        self.assertIn("backbone_forecast", outputs)
+        self.assertTrue(torch.allclose(outputs["forecast"], outputs["backbone_forecast"], atol=1e-6))
+        self.assertLess(float(outputs["aux_losses"]["identity_in"].item()), 1e-6)
+        self.assertLess(float(outputs["aux_losses"]["identity_out"].item()), 1e-6)
+
 
 if __name__ == "__main__":
     unittest.main()

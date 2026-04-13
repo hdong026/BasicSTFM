@@ -131,6 +131,8 @@ class VariableInputInterfaceHead(nn.Module):
         backend_type: str = "gru",
         dropout: float = 0.0,
         stronger_conditioning: bool = True,
+        residual_identity: bool = False,
+        residual_scale_init: float = 1.0,
     ) -> None:
         super().__init__()
         self.runtime_input_dim = int(runtime_input_dim)
@@ -138,6 +140,7 @@ class VariableInputInterfaceHead(nn.Module):
         self.backbone_input_dim = int(backbone_input_dim)
         self.hidden_dim = int(hidden_dim)
         self.stronger_conditioning = bool(stronger_conditioning)
+        self.residual_identity = bool(residual_identity)
         self.backend = make_sequence_backend(
             backend_type,
             input_dim=int(runtime_input_dim),
@@ -148,6 +151,7 @@ class VariableInputInterfaceHead(nn.Module):
         self.norm = nn.LayerNorm(self.hidden_dim)
         self.base_proj = nn.Linear(self.hidden_dim, self.backbone_input_dim)
         self.private_proj = nn.Linear(self.hidden_dim, int(bottleneck_dim))
+        self.residual_scale = nn.Parameter(torch.tensor(float(residual_scale_init)))
 
     def forward(
         self,
@@ -177,7 +181,21 @@ class VariableInputInterfaceHead(nn.Module):
         )
         gate = _resolve_gate(hidden, conditioning.input_gate)
         gate = gate if self.stronger_conditioning else 0.5 * gate
-        out = base + gate * residual
+        learned = base + gate * residual
+        if self.residual_identity:
+            identity = align_runtime_input(
+                x,
+                target_len=self.backbone_input_len,
+                target_dim=self.backbone_input_dim,
+            )
+            out = identity.permute(0, 2, 1, 3).reshape(
+                batch * nodes,
+                self.backbone_input_len,
+                self.backbone_input_dim,
+            )
+            out = out + self.residual_scale.to(dtype=out.dtype) * learned
+        else:
+            out = learned
         private = self.private_proj(hidden.mean(dim=1)).reshape(batch, nodes, -1).mean(dim=1)
         out = out.reshape(batch, nodes, self.backbone_input_len, self.backbone_input_dim)
         out = out.permute(0, 2, 1, 3).contiguous()
@@ -198,11 +216,14 @@ class VariableOutputInterfaceHead(nn.Module):
         backend_type: str = "gru",
         dropout: float = 0.0,
         stronger_conditioning: bool = False,
+        residual_identity: bool = False,
+        residual_scale_init: float = 1.0,
     ) -> None:
         super().__init__()
         self.runtime_output_dim = int(runtime_output_dim)
         self.hidden_dim = int(hidden_dim)
         self.stronger_conditioning = bool(stronger_conditioning)
+        self.residual_identity = bool(residual_identity)
         self.backend = make_sequence_backend(
             backend_type,
             input_dim=int(backbone_output_dim),
@@ -213,6 +234,7 @@ class VariableOutputInterfaceHead(nn.Module):
         self.norm = nn.LayerNorm(self.hidden_dim)
         self.base_proj = nn.Linear(self.hidden_dim, self.runtime_output_dim)
         self.private_proj = nn.Linear(self.hidden_dim, int(bottleneck_dim))
+        self.residual_scale = nn.Parameter(torch.tensor(float(residual_scale_init)))
 
     def forward(
         self,
@@ -237,11 +259,49 @@ class VariableOutputInterfaceHead(nn.Module):
         )
         gate = _resolve_gate(hidden, conditioning.output_gate)
         gate = 0.5 * gate if self.stronger_conditioning else gate
-        out = base + gate * residual
+        learned = base + gate * residual
+        if self.residual_identity:
+            identity = align_runtime_output(
+                backbone_forecast,
+                target_len=int(target_len),
+                target_dim=self.runtime_output_dim,
+            )
+            out = identity.permute(0, 2, 1, 3).reshape(batch * nodes, int(target_len), self.runtime_output_dim)
+            out = out + self.residual_scale.to(dtype=out.dtype) * learned
+        else:
+            out = learned
         private = self.private_proj(hidden.mean(dim=1)).reshape(batch, nodes, -1).mean(dim=1)
         out = out.reshape(batch, nodes, int(target_len), self.runtime_output_dim)
         out = out.permute(0, 2, 1, 3).contiguous()
         return out, private
+
+
+def align_runtime_input(x: torch.Tensor, *, target_len: int, target_dim: int) -> torch.Tensor:
+    x = ensure_4d(x)
+    batch, steps, nodes, channels = x.shape
+    if steps != int(target_len):
+        value = x.permute(0, 2, 3, 1).reshape(batch * nodes, channels, steps)
+        value = F.interpolate(value, size=int(target_len), mode="linear", align_corners=False)
+        x = value.reshape(batch, nodes, channels, int(target_len)).permute(0, 3, 1, 2).contiguous()
+    if channels < int(target_dim):
+        x = F.pad(x, (0, int(target_dim) - channels))
+    elif channels > int(target_dim):
+        x = x[..., : int(target_dim)]
+    return x.contiguous()
+
+
+def align_runtime_output(value: torch.Tensor, *, target_len: int, target_dim: int) -> torch.Tensor:
+    value = ensure_4d(value)
+    batch, steps, nodes, channels = value.shape
+    if steps != int(target_len):
+        seq = value.permute(0, 2, 3, 1).reshape(batch * nodes, channels, steps)
+        seq = F.interpolate(seq, size=int(target_len), mode="linear", align_corners=False)
+        value = seq.reshape(batch, nodes, channels, int(target_len)).permute(0, 3, 1, 2).contiguous()
+    if channels < int(target_dim):
+        value = F.pad(value, (0, int(target_dim) - channels))
+    elif channels > int(target_dim):
+        value = value[..., : int(target_dim)]
+    return value.contiguous()
 
 
 def _resample_time(value: torch.Tensor, target_len: int) -> torch.Tensor:

@@ -12,11 +12,18 @@ from basicstfm.models.foundation.common import ensure_4d
 from basicstfm.models.foundation.opencity import OpenCityFoundationModel
 from basicstfm.registry import MODELS
 from basicstfm.utils.checkpoint import torch_load
+from basicstfm_ext.losses.distillation_loss import DistillationLoss
+from basicstfm_ext.losses.identity_loss import IdentityLoss
 from basicstfm_ext.losses.orthogonality import OrthogonalityLoss
 from basicstfm_ext.losses.redundancy import RedundancyPenalty
 from basicstfm_ext.models.dataset_conditioning import build_conditioner
 from basicstfm_ext.models.domain_regularizers import GRLDomainClassifier
-from basicstfm_ext.models.sequence_heads import VariableInputInterfaceHead, VariableOutputInterfaceHead
+from basicstfm_ext.models.sequence_heads import (
+    VariableInputInterfaceHead,
+    VariableOutputInterfaceHead,
+    align_runtime_input,
+    align_runtime_output,
+)
 from basicstfm_ext.utils.shape_debug import ensure_shape
 
 LOGGER = logging.getLogger(__name__)
@@ -46,6 +53,7 @@ class OpenCityVariableInterfaceWrapper(nn.Module):
         backbone_cfg: Optional[Dict[str, Any]] = None,
         interface_cfg: Optional[Dict[str, Any]] = None,
         conditioning_cfg: Optional[Dict[str, Any]] = None,
+        distill_cfg: Optional[Dict[str, Any]] = None,
         regularization_cfg: Optional[Dict[str, Any]] = None,
         pretrained_path: Optional[str] = None,
         strict_load: bool = False,
@@ -60,6 +68,7 @@ class OpenCityVariableInterfaceWrapper(nn.Module):
         backbone_cfg = dict(backbone_cfg or {})
         interface_cfg = dict(interface_cfg or {})
         conditioning_cfg = dict(conditioning_cfg or {})
+        distill_cfg = dict(distill_cfg or {})
         regularization_cfg = dict(regularization_cfg or {})
 
         self.backbone_input_len = int(backbone_cfg.pop("input_len", 12))
@@ -83,6 +92,9 @@ class OpenCityVariableInterfaceWrapper(nn.Module):
         head_dropout = float(interface_cfg.get("dropout", 0.0))
         stronger_input = bool(interface_cfg.get("stronger_input_conditioning_than_output", True))
         self.enable_private_branch = bool(interface_cfg.get("enable_private_branch", True))
+        residual_identity = bool(interface_cfg.get("residual_identity", False))
+        input_residual_scale_init = float(interface_cfg.get("input_residual_scale_init", 1.0))
+        output_residual_scale_init = float(interface_cfg.get("output_residual_scale_init", 1.0))
 
         self.input_head = VariableInputInterfaceHead(
             runtime_input_dim=self.runtime_input_dim,
@@ -94,6 +106,8 @@ class OpenCityVariableInterfaceWrapper(nn.Module):
             backend_type=head_type,
             dropout=head_dropout,
             stronger_conditioning=stronger_input,
+            residual_identity=residual_identity,
+            residual_scale_init=input_residual_scale_init,
         )
         self.output_head = VariableOutputInterfaceHead(
             backbone_output_dim=self.backbone_output_dim,
@@ -104,6 +118,8 @@ class OpenCityVariableInterfaceWrapper(nn.Module):
             backend_type=head_type,
             dropout=head_dropout,
             stronger_conditioning=not stronger_input,
+            residual_identity=residual_identity,
+            residual_scale_init=output_residual_scale_init,
         )
 
         variant = str(interface_cfg.get("variant", "C")).upper()
@@ -134,6 +150,11 @@ class OpenCityVariableInterfaceWrapper(nn.Module):
         self.lambda_adv = float(regularization_cfg.get("lambda_adv", 0.0))
         self.lambda_ortho = float(regularization_cfg.get("lambda_ortho", 0.0))
         self.lambda_red = float(regularization_cfg.get("lambda_red", 0.0))
+        self.lambda_distill_matched = float(distill_cfg.get("lambda_distill_matched", 0.0))
+        self.lambda_identity_in = float(distill_cfg.get("lambda_identity_in", 0.0))
+        self.lambda_identity_out = float(distill_cfg.get("lambda_identity_out", 0.0))
+        self.distill_only_when_matched = bool(distill_cfg.get("distill_only_when_matched", True))
+        self.identity_only_when_matched = bool(distill_cfg.get("identity_only_when_matched", True))
         self.domain_classifier = (
             GRLDomainClassifier(
                 input_dim=int(backbone_cfg.get("hidden_dim", 128)),
@@ -146,6 +167,8 @@ class OpenCityVariableInterfaceWrapper(nn.Module):
         )
         self.orthogonality = OrthogonalityLoss()
         self.redundancy = RedundancyPenalty()
+        self.identity_loss = IdentityLoss()
+        self.distillation_loss = DistillationLoss(mode=str(distill_cfg.get("distill_mode", "mse")))
         self.debug_shapes = bool(interface_cfg.get("debug_shapes", False))
 
         if pretrained_path:
@@ -163,6 +186,11 @@ class OpenCityVariableInterfaceWrapper(nn.Module):
         ensure_shape("x", x, 4)
         conditioning = self.conditioning(x, graph=graph, dataset_context=dataset_context)
         adapted_x, input_private = self.input_head(x, conditioning)
+        input_identity = align_runtime_input(
+            x,
+            target_len=self.backbone_input_len,
+            target_dim=self.backbone_input_dim,
+        )
         if self.debug_shapes:
             LOGGER.debug("input -> adapted_x %s", tuple(adapted_x.shape))
 
@@ -181,22 +209,40 @@ class OpenCityVariableInterfaceWrapper(nn.Module):
             self.backbone_output_len,
             self.backbone_output_dim,
         ).permute(0, 2, 1, 3).contiguous()
+        target_len = _resolve_target_len(dataset_context, self.runtime_output_len)
+        backbone_runtime = align_runtime_output(
+            backbone_forecast,
+            target_len=target_len,
+            target_dim=self.runtime_output_dim,
+        )
 
         forecast, output_private = self.output_head(
             backbone_forecast,
             conditioning=conditioning,
-            target_len=_resolve_target_len(dataset_context, self.runtime_output_len),
+            target_len=target_len,
         )
         private_feat = 0.5 * (input_private + output_private)
         if not self.enable_private_branch:
             private_feat = torch.zeros_like(private_feat)
+        matched_input = x.shape[1] == self.backbone_input_len and x.shape[3] == self.backbone_input_dim
+        matched_output = (
+            forecast.shape[1] == self.backbone_output_len
+            and forecast.shape[3] == self.backbone_output_dim
+        )
         aux_losses = self._compute_aux_losses(
             shared_feat=shared_feat,
             private_feat=private_feat,
             dataset_context=dataset_context,
+            adapted_x=adapted_x,
+            input_identity=input_identity,
+            forecast=forecast,
+            backbone_forecast=backbone_runtime,
+            matched_input=matched_input,
+            matched_output=matched_output,
         )
         out: Dict[str, torch.Tensor] = {
             "forecast": forecast,
+            "backbone_forecast": backbone_runtime,
             "shared_feat": shared_feat,
             "private_feat": private_feat,
             "dataset_embedding": conditioning.dataset_embedding,
@@ -233,6 +279,12 @@ class OpenCityVariableInterfaceWrapper(nn.Module):
         shared_feat: torch.Tensor,
         private_feat: torch.Tensor,
         dataset_context: Optional[Mapping[str, Any]],
+        adapted_x: torch.Tensor,
+        input_identity: torch.Tensor,
+        forecast: torch.Tensor,
+        backbone_forecast: torch.Tensor,
+        matched_input: bool,
+        matched_output: bool,
     ) -> Dict[str, torch.Tensor]:
         aux: Dict[str, torch.Tensor] = {}
         domain_index = self._resolve_domain_index(
@@ -249,6 +301,15 @@ class OpenCityVariableInterfaceWrapper(nn.Module):
         if self.lambda_red > 0.0:
             joint = torch.cat([shared_feat, private_feat], dim=-1)
             aux["redundancy"] = self.lambda_red * self.redundancy(joint)
+        if self.lambda_identity_in > 0.0 and (matched_input or not self.identity_only_when_matched):
+            aux["identity_in"] = self.lambda_identity_in * self.identity_loss(adapted_x, input_identity)
+        if self.lambda_identity_out > 0.0 and (matched_output or not self.identity_only_when_matched):
+            aux["identity_out"] = self.lambda_identity_out * self.identity_loss(forecast, backbone_forecast)
+        if self.lambda_distill_matched > 0.0 and (matched_output or not self.distill_only_when_matched):
+            aux["distill_matched"] = self.lambda_distill_matched * self.distillation_loss(
+                forecast,
+                backbone_forecast.detach(),
+            )
         return aux
 
     def _resolve_domain_index(
