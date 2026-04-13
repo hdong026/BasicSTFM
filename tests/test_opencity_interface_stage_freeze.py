@@ -26,7 +26,7 @@ class OpenCityInterfaceStageFreezeTest(unittest.TestCase):
                 "experiment_name": "opencity_interface_freeze_test",
                 "data": {
                     "type": "SyntheticDataModule",
-                    "num_timesteps": 160,
+                    "num_timesteps": 480,
                     "num_nodes": 6,
                     "num_channels": 1,
                     "input_len": 24,
