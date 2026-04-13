@@ -5,34 +5,34 @@ trainer:
   type: MultiStageTrainer
   device: auto
   work_dir: runs/unist_traffic_benchmark
-  log_every: 20
+  log_every: 50
 
 dataset_registry:
   METR-LA:
     name: METR-LA
     data_path: data/METR-LA/data.npz
     graph_path: data/METR-LA/adj.npz
-    batch_size: 10
+    batch_size: 12
   PEMS-BAY:
     name: PEMS-BAY
     data_path: data/PEMS-BAY/data.npz
     graph_path: data/PEMS-BAY/adj.npz
-    batch_size: 4
+    batch_size: 8
   PEMS04:
     name: PEMS04
     data_path: data/PEMS04/data.npz
     graph_path: data/PEMS04/adj.npz
-    batch_size: 6
+    batch_size: 8
   PEMS07:
     name: PEMS07
     data_path: data/PEMS07/data.npz
     graph_path: data/PEMS07/adj.npz
-    batch_size: 4
+    batch_size: 6
   PEMS08:
     name: PEMS08
     data_path: data/PEMS08/data.npz
     graph_path: data/PEMS08/adj.npz
-    batch_size: 8
+    batch_size: 12
 
 dataset_groups:
   benchmark_sources:
@@ -48,7 +48,7 @@ data:
   dataset_key: METR-LA
   input_len: 24
   output_len: 12
-  batch_size: 8
+  batch_size: 12
   split: [0.7, 0.1, 0.2]
   scaler:
     type: standard
@@ -60,14 +60,14 @@ model:
   output_dim: auto
   input_len: auto
   output_len: auto
-  hidden_dim: 128
-  encoder_layers: 6
-  decoder_layers: 4
-  num_heads: 8
-  ffn_dim: 256
+  hidden_dim: 96
+  encoder_layers: 4
+  decoder_layers: 2
+  num_heads: 4
+  ffn_dim: 192
   use_prompt: true
-  num_memory_spatial: 128
-  num_memory_temporal: 128
+  num_memory_spatial: 64
+  num_memory_temporal: 64
 
 pipeline:
   stages:
@@ -79,7 +79,7 @@ pipeline:
         dataset_group: benchmark_sources
         input_len: 24
         output_len: 12
-        batch_size: 4
+        batch_size: 6
         train_strategy: uniform
         eval_strategy: per_dataset
         split: [0.7, 0.1, 0.2]
@@ -116,7 +116,7 @@ pipeline:
         dataset_key: METR-LA
         input_len: 24
         output_len: 12
-        batch_size: 8
+        batch_size: 12
         split: [0.7, 0.1, 0.2]
         scaler:
           type: standard
@@ -141,7 +141,7 @@ pipeline:
         dataset_key: METR-LA
         input_len: 24
         output_len: 12
-        batch_size: 8
+        batch_size: 12
         split: [0.7, 0.1, 0.2]
         scaler:
           type: standard
@@ -185,7 +185,7 @@ pipeline:
         dataset_key: PEMS08
         input_len: 24
         output_len: 12
-        batch_size: 8
+        batch_size: 12
         split: [0.7, 0.1, 0.2]
         scaler:
           type: standard
@@ -210,7 +210,7 @@ pipeline:
         dataset_key: PEMS08
         input_len: 24
         output_len: 12
-        batch_size: 8
+        batch_size: 12
         split: [0.7, 0.1, 0.2]
         scaler:
           type: standard
