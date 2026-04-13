@@ -1,4 +1,4 @@
-experiment_name: opencity_interface_A_prototype_mixture
+experiment_name: opencity_interface_A_prototype_mixture_12x12
 seed: 42
 
 custom_imports:
@@ -7,7 +7,7 @@ custom_imports:
 trainer:
   type: MultiStageTrainer
   device: auto
-  work_dir: runs/opencity_interface_A_prototype_mixture
+  work_dir: runs/opencity_interface_A_prototype_mixture_12x12
   log_every: 50
 
 dataset_registry:
@@ -46,8 +46,8 @@ dataset_groups:
 data:
   type: WindowDataModule
   dataset_key: METR-LA
-  input_len: 24
-  output_len: 24
+  input_len: 12
+  output_len: 12
   batch_size: 12
   split: [0.7, 0.1, 0.2]
   scaler:
@@ -88,7 +88,7 @@ model:
     use_graph_stats: true
     use_spectral_stats: true
     descriptor_momentum: 0.9
-    descriptor_cache_path: runs/opencity_interface_A_prototype_mixture/descriptor_cache.pt
+    descriptor_cache_path: runs/opencity_interface_A_prototype_mixture_12x12/descriptor_cache.pt
     zero_shot_init_method: dataset_stats
     instance_refinement: false
   regularization_cfg:
@@ -106,8 +106,8 @@ pipeline:
       data:
         type: MultiDatasetWindowDataModule
         dataset_group: benchmark_sources
-        input_len: 24
-        output_len: 24
+        input_len: 12
+        output_len: 12
         batch_size: 6
         train_strategy: proportional
         eval_strategy: per_dataset
@@ -142,8 +142,8 @@ pipeline:
       data:
         type: WindowDataModule
         dataset_key: METR-LA
-        input_len: 24
-        output_len: 24
+        input_len: 12
+        output_len: 12
         batch_size: 12
         split: [0.7, 0.1, 0.2]
         scaler:
@@ -167,8 +167,8 @@ pipeline:
       data:
         type: WindowDataModule
         dataset_key: METR-LA
-        input_len: 24
-        output_len: 24
+        input_len: 12
+        output_len: 12
         batch_size: 12
         split: [0.7, 0.1, 0.2]
         scaler:
@@ -211,8 +211,8 @@ pipeline:
       data:
         type: WindowDataModule
         dataset_key: PEMS08
-        input_len: 24
-        output_len: 24
+        input_len: 12
+        output_len: 12
         batch_size: 12
         split: [0.7, 0.1, 0.2]
         scaler:
@@ -236,8 +236,8 @@ pipeline:
       data:
         type: WindowDataModule
         dataset_key: PEMS08
-        input_len: 24
-        output_len: 24
+        input_len: 12
+        output_len: 12
         batch_size: 12
         split: [0.7, 0.1, 0.2]
         scaler:

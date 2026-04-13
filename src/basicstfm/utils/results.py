@@ -144,8 +144,11 @@ def pretty_model_name(row: Mapping[str, Any]) -> str:
 
     experiment_mapping = {
         "opencity_interface_a_prototype_mixture": "OpenCity-A",
+        "opencity_interface_a_prototype_mixture_12x12": "OpenCity-A",
         "opencity_interface_b_hyper_head": "OpenCity-B",
+        "opencity_interface_b_hyper_head_12x12": "OpenCity-B",
         "opencity_interface_c_universal_modulated": "OpenCity-C",
+        "opencity_interface_c_universal_modulated_12x12": "OpenCity-C",
         "opencity_traffic_benchmark": "OpenCity",
     }
     if experiment_name in experiment_mapping:
