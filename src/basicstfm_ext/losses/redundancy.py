@@ -20,7 +20,7 @@ class RedundancyPenalty(nn.Module):
         if features.ndim > 2:
             features = features.reshape(features.shape[0], -1)
         features = features - features.mean(dim=0, keepdim=True)
-        features = features / features.std(dim=0, keepdim=True).clamp_min(self.eps)
+        features = features / features.std(dim=0, keepdim=True, unbiased=False).clamp_min(self.eps)
         cov = features.t().matmul(features) / max(features.shape[0], 1)
         diag = torch.diag_embed(torch.diagonal(cov))
         off_diag = cov - diag

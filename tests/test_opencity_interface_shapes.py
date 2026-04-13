@@ -142,6 +142,44 @@ class OpenCityInterfaceShapeTest(unittest.TestCase):
         )
         self.assertIn("domain_adv", outputs["aux_losses"])
 
+    def test_wrapper_accepts_fewer_runtime_channels_than_configured(self) -> None:
+        model = MODELS.build(
+            {
+                "type": "OpenCityVariableInterfaceWrapper",
+                "num_nodes": 5,
+                "input_dim": 3,
+                "output_dim": 3,
+                "input_len": 24,
+                "output_len": 18,
+                "backbone_cfg": {
+                    "input_len": 12,
+                    "output_len": 12,
+                    "hidden_dim": 16,
+                    "num_layers": 1,
+                    "num_heads": 4,
+                    "ffn_dim": 32,
+                    "dropout": 0.0,
+                },
+                "interface_cfg": {
+                    "variant": "C",
+                    "head_type": "gru",
+                    "hidden_dim": 12,
+                    "bottleneck_dim": 6,
+                },
+                "conditioning_cfg": {
+                    "embedding_dim": 16,
+                    "stats_hidden_dim": 24,
+                    "rank": 4,
+                },
+            }
+        )
+        outputs = model(
+            torch.randn(2, 24, 5, 1),
+            graph=torch.eye(5),
+            dataset_context={"dataset_name": "TARGET", "metadata": {"target_len": 18}},
+        )
+        self.assertEqual(tuple(outputs["forecast"].shape), (2, 18, 5, 3))
+
 
 if __name__ == "__main__":
     unittest.main()

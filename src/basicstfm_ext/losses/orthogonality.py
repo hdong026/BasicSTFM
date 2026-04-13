@@ -29,7 +29,7 @@ class OrthogonalityLoss(nn.Module):
 
         shared = shared - shared.mean(dim=0, keepdim=True)
         private = private - private.mean(dim=0, keepdim=True)
-        shared = shared / shared.std(dim=0, keepdim=True).clamp_min(self.eps)
-        private = private / private.std(dim=0, keepdim=True).clamp_min(self.eps)
+        shared = shared / shared.std(dim=0, keepdim=True, unbiased=False).clamp_min(self.eps)
+        private = private / private.std(dim=0, keepdim=True, unbiased=False).clamp_min(self.eps)
         cross_cov = shared.t().matmul(private) / max(shared.shape[0], 1)
         return cross_cov.pow(2).mean()

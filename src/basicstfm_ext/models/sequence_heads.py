@@ -133,6 +133,7 @@ class VariableInputInterfaceHead(nn.Module):
         stronger_conditioning: bool = True,
     ) -> None:
         super().__init__()
+        self.runtime_input_dim = int(runtime_input_dim)
         self.backbone_input_len = int(backbone_input_len)
         self.backbone_input_dim = int(backbone_input_dim)
         self.hidden_dim = int(hidden_dim)
@@ -155,6 +156,13 @@ class VariableInputInterfaceHead(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         x = ensure_4d(x)
         batch, steps, nodes, channels = x.shape
+        if channels > self.runtime_input_dim:
+            raise ValueError(
+                f"Expected at most runtime_input_dim={self.runtime_input_dim}, got {channels}"
+            )
+        if channels < self.runtime_input_dim:
+            x = F.pad(x, (0, self.runtime_input_dim - channels))
+            channels = self.runtime_input_dim
         seq = x.permute(0, 2, 1, 3).reshape(batch * nodes, steps, channels)
         hidden = self.backend(seq)
         hidden = _resample_time(hidden, self.backbone_input_len)
