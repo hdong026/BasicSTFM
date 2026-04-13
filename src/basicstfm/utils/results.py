@@ -140,6 +140,17 @@ def infer_stage_regime(row: Mapping[str, Any]) -> str:
 
 def pretty_model_name(row: Mapping[str, Any]) -> str:
     model_type = str(row.get("model_type") or "")
+    experiment_name = str(row.get("experiment_name") or "").lower()
+
+    experiment_mapping = {
+        "opencity_interface_a_prototype_mixture": "OpenCity-A",
+        "opencity_interface_b_hyper_head": "OpenCity-B",
+        "opencity_interface_c_universal_modulated": "OpenCity-C",
+        "opencity_traffic_benchmark": "OpenCity",
+    }
+    if experiment_name in experiment_mapping:
+        return experiment_mapping[experiment_name]
+
     mapping = {
         "OpenCityFoundationModel": "OpenCity",
         "FactoSTFoundationModel": "FactoST",
@@ -148,7 +159,6 @@ def pretty_model_name(row: Mapping[str, Any]) -> str:
     if model_type in mapping:
         return mapping[model_type]
 
-    experiment_name = str(row.get("experiment_name") or "").lower()
     if "opencity" in experiment_name:
         return "OpenCity"
     if "factost" in experiment_name:
