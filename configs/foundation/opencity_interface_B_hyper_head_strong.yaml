@@ -1,0 +1,285 @@
+experiment_name: opencity_interface_B_hyper_head_strong_12x12
+seed: 42
+
+custom_imports:
+  - basicstfm_ext
+
+trainer:
+  type: MultiStageTrainer
+  device: auto
+  work_dir: runs/opencity_interface_B_hyper_head_strong_12x12
+  log_every: 50
+
+dataset_registry:
+  METR-LA:
+    name: METR-LA
+    data_path: data/METR-LA/data.npz
+    graph_path: data/METR-LA/adj.npz
+    batch_size: 12
+  PEMS-BAY:
+    name: PEMS-BAY
+    data_path: data/PEMS-BAY/data.npz
+    graph_path: data/PEMS-BAY/adj.npz
+    batch_size: 8
+  PEMS04:
+    name: PEMS04
+    data_path: data/PEMS04/data.npz
+    graph_path: data/PEMS04/adj.npz
+    batch_size: 8
+  PEMS07:
+    name: PEMS07
+    data_path: data/PEMS07/data.npz
+    graph_path: data/PEMS07/adj.npz
+    batch_size: 6
+  PEMS08:
+    name: PEMS08
+    data_path: data/PEMS08/data.npz
+    graph_path: data/PEMS08/adj.npz
+    batch_size: 8
+
+dataset_groups:
+  benchmark_sources:
+    - PEMS-BAY
+    - PEMS04
+    - PEMS07
+
+data:
+  type: WindowDataModule
+  dataset_key: METR-LA
+  input_len: 12
+  output_len: 12
+  batch_size: 16
+  split: [0.7, 0.1, 0.2]
+  scaler:
+    type: standard
+
+model:
+  type: OpenCityVariableInterfaceWrapper
+  num_nodes: auto
+  input_dim: auto
+  output_dim: auto
+  input_len: auto
+  output_len: auto
+  backbone_cfg:
+    input_len: 12
+    output_len: 12
+    hidden_dim: 128
+    num_layers: 4
+    num_heads: 4
+    ffn_dim: 256
+    dropout: 0.1
+  interface_cfg:
+    variant: B
+    head_type: gru
+    hidden_dim: 64
+    bottleneck_dim: 16
+    num_layers: 1
+    dropout: 0.02
+    stronger_input_conditioning_than_output: true
+    enable_private_branch: false
+    residual_identity: true
+    input_residual_scale_init: 0.0005
+    output_residual_scale_init: 0.0005
+    debug_shapes: false
+  conditioning_cfg:
+    source_datasets: [PEMS-BAY, PEMS04, PEMS07]
+    embedding_dim: 48
+    stats_hidden_dim: 96
+    hyper_hidden_dim: 160
+    rank: 12
+    use_graph_stats: true
+    use_spectral_stats: true
+    descriptor_momentum: 0.9
+    descriptor_cache_path: runs/opencity_interface_B_hyper_head_strong_12x12/descriptor_cache.pt
+    zero_shot_init_method: dataset_stats
+    instance_refinement: true
+  distill_cfg:
+    lambda_distill_matched: 0.08
+    lambda_identity_in: 0.03
+    lambda_identity_out: 0.05
+    distill_only_when_matched: true
+    identity_only_when_matched: true
+    distill_mode: mse
+  regularization_cfg:
+    lambda_adv: 0.0
+    lambda_ortho: 0.0
+    lambda_red: 0.0
+    grl_coeff: 1.0
+    domain_hidden_dim: 64
+
+pipeline:
+  stages:
+    - name: multisource_interface_pretrain
+      save_artifact: opencity_interface_B_strong_pretrain
+      reset_data: true
+      data:
+        type: MultiDatasetWindowDataModule
+        dataset_group: benchmark_sources
+        input_len: 12
+        output_len: 12
+        batch_size: 8
+        train_strategy: proportional
+        eval_strategy: per_dataset
+        split: [0.7, 0.1, 0.2]
+        scaler:
+          type: standard
+      epochs: 5
+      task:
+        type: InterfaceForecastingTask
+      losses:
+        - type: mae
+          weight: 1.0
+        - type: mse
+          weight: 0.05
+      metrics:
+        - type: mae
+        - type: rmse
+      optimizer:
+        type: AdamW
+        lr: 0.001
+        weight_decay: 0.0001
+      scheduler:
+        type: CosineAnnealingLR
+        T_max: 5
+      validate_every: 1
+      gradient_clip_val: 5.0
+
+    - name: metr_la_zero_shot
+      eval_only: true
+      epochs: 0
+      reset_data: true
+      data:
+        type: WindowDataModule
+        dataset_key: METR-LA
+        input_len: 12
+        output_len: 12
+        batch_size: 16
+        split: [0.7, 0.1, 0.2]
+        scaler:
+          type: standard
+      load_from: opencity_interface_B_strong_pretrain
+      load_method: checkpoint
+      strict_load: true
+      task:
+        type: InterfaceForecastingTask
+        dataset_name: METR-LA
+        model_mode: zero_shot
+      losses:
+        - type: mae
+      metrics:
+        - type: mae
+        - type: rmse
+
+    - name: metr_la_five_percent_head_tuning
+      epochs: 3
+      reset_data: true
+      data:
+        type: WindowDataModule
+        dataset_key: METR-LA
+        input_len: 12
+        output_len: 12
+        batch_size: 16
+        split: [0.7, 0.1, 0.2]
+        scaler:
+          type: standard
+      load_from: opencity_interface_B_strong_pretrain
+      load_method: checkpoint
+      strict_load: true
+      few_shot_ratio: 0.05
+      freeze:
+        - all
+      unfreeze:
+        - input_head.*
+        - output_head.*
+        - conditioning.*
+        - backbone.forecast_head.*
+      task:
+        type: InterfaceForecastingTask
+        dataset_name: METR-LA
+      losses:
+        - type: mae
+          weight: 1.0
+        - type: mse
+          weight: 0.05
+      metrics:
+        - type: mae
+        - type: rmse
+      optimizer:
+        type: AdamW
+        lr: 0.0007
+        weight_decay: 0.0001
+      scheduler:
+        type: CosineAnnealingLR
+        T_max: 3
+      validate_every: 1
+      gradient_clip_val: 5.0
+
+    - name: pems08_zero_shot
+      eval_only: true
+      epochs: 0
+      reset_data: true
+      data:
+        type: WindowDataModule
+        dataset_key: PEMS08
+        input_len: 12
+        output_len: 12
+        batch_size: 16
+        split: [0.7, 0.1, 0.2]
+        scaler:
+          type: standard
+      load_from: opencity_interface_B_strong_pretrain
+      load_method: checkpoint
+      strict_load: true
+      task:
+        type: InterfaceForecastingTask
+        dataset_name: PEMS08
+        model_mode: zero_shot
+      losses:
+        - type: mae
+      metrics:
+        - type: mae
+        - type: rmse
+
+    - name: pems08_five_percent_head_tuning
+      epochs: 3
+      reset_data: true
+      data:
+        type: WindowDataModule
+        dataset_key: PEMS08
+        input_len: 12
+        output_len: 12
+        batch_size: 16
+        split: [0.7, 0.1, 0.2]
+        scaler:
+          type: standard
+      load_from: opencity_interface_B_strong_pretrain
+      load_method: checkpoint
+      strict_load: true
+      few_shot_ratio: 0.05
+      freeze:
+        - all
+      unfreeze:
+        - input_head.*
+        - output_head.*
+        - conditioning.*
+        - backbone.forecast_head.*
+      task:
+        type: InterfaceForecastingTask
+        dataset_name: PEMS08
+      losses:
+        - type: mae
+          weight: 1.0
+        - type: mse
+          weight: 0.05
+      metrics:
+        - type: mae
+        - type: rmse
+      optimizer:
+        type: AdamW
+        lr: 0.0007
+        weight_decay: 0.0001
+      scheduler:
+        type: CosineAnnealingLR
+        T_max: 3
+      validate_every: 1
+      gradient_clip_val: 5.0
