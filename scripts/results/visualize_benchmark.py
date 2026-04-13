@@ -21,6 +21,9 @@ MODEL_ORDER = (
     "OpenCity-A",
     "OpenCity-B",
     "OpenCity-C",
+    "OpenCity-D",
+    "OpenCity-D-Fair",
+    "OpenCity-D-Curriculum",
     "FactoST",
     "UniST",
 )
@@ -30,6 +33,9 @@ MODEL_PALETTE = {
     "OpenCity-A": "#F58518",
     "OpenCity-B": "#54A24B",
     "OpenCity-C": "#B279A2",
+    "OpenCity-D": "#B6992D",
+    "OpenCity-D-Fair": "#E4C969",
+    "OpenCity-D-Curriculum": "#9D755D",
     "FactoST": "#E45756",
     "UniST": "#72B7B2",
 }
