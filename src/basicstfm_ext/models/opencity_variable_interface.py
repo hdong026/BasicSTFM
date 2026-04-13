@@ -235,7 +235,11 @@ class OpenCityVariableInterfaceWrapper(nn.Module):
         dataset_context: Optional[Mapping[str, Any]],
     ) -> Dict[str, torch.Tensor]:
         aux: Dict[str, torch.Tensor] = {}
-        domain_index = self._resolve_domain_index(dataset_context, shared_feat.device)
+        domain_index = self._resolve_domain_index(
+            dataset_context,
+            shared_feat.device,
+            batch_size=int(shared_feat.shape[0]),
+        )
         if self.domain_classifier is not None and domain_index is not None:
             domain_loss = self.domain_classifier(shared_feat, domain_index)
             if domain_loss is not None:
@@ -251,12 +255,20 @@ class OpenCityVariableInterfaceWrapper(nn.Module):
         self,
         dataset_context: Optional[Mapping[str, Any]],
         device: torch.device,
+        batch_size: int,
     ) -> Optional[torch.Tensor]:
         if not self.source_datasets or dataset_context is None:
             return None
         value = dataset_context.get("dataset_index")
         if isinstance(value, torch.Tensor):
-            return value.reshape(-1)[:1].to(device=device, dtype=torch.long)
+            labels = value.reshape(-1).to(device=device, dtype=torch.long)
+            if labels.numel() == 1 and batch_size > 1:
+                labels = labels.expand(batch_size)
+            elif labels.numel() != batch_size:
+                raise ValueError(
+                    f"dataset_index has {labels.numel()} labels for batch_size={batch_size}"
+                )
+            return labels
         dataset_name = dataset_context.get("dataset_name")
         if isinstance(dataset_name, (list, tuple)):
             dataset_name = dataset_name[0] if dataset_name else None
@@ -265,7 +277,7 @@ class OpenCityVariableInterfaceWrapper(nn.Module):
         index = self.source_name_to_index.get(str(dataset_name))
         if index is None:
             return None
-        return torch.tensor([index], device=device, dtype=torch.long)
+        return torch.full((batch_size,), index, device=device, dtype=torch.long)
 
     @staticmethod
     def _read_state_dict(path: str) -> Dict[str, torch.Tensor]:
