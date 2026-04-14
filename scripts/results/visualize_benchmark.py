@@ -16,32 +16,6 @@ from basicstfm.utils.results import (
     load_stage_result_payload,
 )
 
-MODEL_ORDER = (
-    "OpenCity",
-    "OpenCity-A",
-    "OpenCity-B",
-    "OpenCity-B-Strong",
-    "OpenCity-C",
-    "OpenCity-D",
-    "OpenCity-D-Fair",
-    "OpenCity-D-Curriculum",
-    "FactoST",
-    "UniST",
-)
-
-MODEL_PALETTE = {
-    "OpenCity": "#4C78A8",
-    "OpenCity-A": "#F58518",
-    "OpenCity-B": "#54A24B",
-    "OpenCity-B-Strong": "#2E7D32",
-    "OpenCity-C": "#B279A2",
-    "OpenCity-D": "#B6992D",
-    "OpenCity-D-Fair": "#E4C969",
-    "OpenCity-D-Curriculum": "#9D755D",
-    "FactoST": "#E45756",
-    "UniST": "#72B7B2",
-}
-
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Visualize BasicSTFM benchmark results")
@@ -97,7 +71,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         split=args.split,
         metric=args.metric,
         datasets=dataset_order,
-        model_order=MODEL_ORDER,
+        model_order=("OpenCity", "FactoST", "UniST"),
     )
     if not summary:
         raise SystemExit("No transfer stages found for visualization.")
@@ -215,7 +189,12 @@ def make_figure(
         ) from exc
 
     model_names = [str(row["Model"]) for row in summary]
-    colors = [MODEL_PALETTE.get(name, "#808080") for name in model_names]
+    palette = {
+        "OpenCity": "#4C78A8",
+        "FactoST": "#E45756",
+        "UniST": "#54A24B",
+    }
+    colors = [palette.get(name, "#4C78A8") for name in model_names]
 
     zero = {name: [row.get(f"{dataset} ZS") for dataset in datasets] for name, row in zip(model_names, summary)}
     few = {name: [row.get(f"{dataset} FS") for dataset in datasets] for name, row in zip(model_names, summary)}
