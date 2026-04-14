@@ -50,7 +50,7 @@ model:
   residual_mode: forecast
   fusion_mode: additive
   use_frequency_branch: true
-  num_datasets: 16
+  num_datasets: 3
   diffusion_enabled: true
 
 pipeline:
@@ -69,7 +69,7 @@ pipeline:
         split: [0.7, 0.1, 0.2]
         scaler:
           type: standard
-      epochs: 8
+      epochs: 5
       task:
         type: StableResidualForecastingTask
         phase: scratch
@@ -94,7 +94,7 @@ pipeline:
         weight_decay: 0.0001
       scheduler:
         type: CosineAnnealingLR
-        T_max: 8
+        T_max: 5
       validate_every: 1
       gradient_clip_val: 5.0
 
@@ -130,6 +130,16 @@ pipeline:
 
     - name: metr_la_five_percent_mechanism_tuning
       epochs: 3
+      reset_data: true
+      data:
+        type: WindowDataModule
+        dataset_key: METR-LA
+        input_len: 12
+        output_len: 12
+        batch_size: 16
+        split: [0.7, 0.1, 0.2]
+        scaler:
+          type: standard
       load_from: srd_joint_scratch
       strict_load: true
       few_shot_ratio: 0.05
@@ -140,6 +150,7 @@ pipeline:
         - diffusion_mechanism_learner.*
         - fusion_predictor.*
         - calibration_head.*
+        - stable_trunk.forecast_head.*
       task:
         type: StableResidualForecastingTask
         phase: joint
