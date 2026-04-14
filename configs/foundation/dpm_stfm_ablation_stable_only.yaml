@@ -1,0 +1,83 @@
+experiment_name: srd_stfm_ablation_stable_only
+seed: 42
+
+trainer:
+  type: MultiStageTrainer
+  device: auto
+  work_dir: runs/srd_stfm_ablation_stable_only
+  log_every: 50
+
+data:
+  type: WindowDataModule
+  data_path: data/METR-LA/data.npz
+  graph_path: data/METR-LA/adj.npz
+  input_len: 12
+  output_len: 12
+  batch_size: 16
+  split: [0.7, 0.1, 0.2]
+  scaler:
+    type: standard
+
+model:
+  type: SRDSTFMBackbone
+  num_nodes: auto
+  input_dim: auto
+  output_dim: auto
+  input_len: auto
+  output_len: auto
+  hidden_dim: 128
+  residual_mode: forecast
+  fusion_mode: additive
+  use_frequency_branch: true
+  diffusion_enabled: false
+
+pipeline:
+  stages:
+    - name: stable_only_training
+      save_artifact: srd_stable_only
+      epochs: 5
+      task:
+        type: StableResidualForecastingTask
+        phase: stable_only
+        model_mode: stable_only
+        stable_forecast_weight: 1.0
+        stable_reconstruction_weight: 0.5
+        residual_forecast_weight: 0.0
+        propagation_consistency_weight: 0.0
+        spillover_weight: 0.0
+        orthogonality_weight: 0.0
+        cross_cov_weight: 0.0
+        energy_allocation_weight: 0.0
+        mutual_exclusion_weight: 0.0
+      losses:
+        - type: mae
+          weight: 1.0
+        - type: mse
+          weight: 0.05
+      metrics:
+        - type: mae
+        - type: rmse
+      optimizer:
+        type: AdamW
+        lr: 0.001
+        weight_decay: 0.0001
+      scheduler:
+        type: CosineAnnealingLR
+        T_max: 5
+      validate_every: 1
+      gradient_clip_val: 5.0
+
+    - name: zero_shot_eval
+      eval_only: true
+      epochs: 0
+      load_from: srd_stable_only
+      strict_load: true
+      task:
+        type: StableResidualForecastingTask
+        phase: stable_only
+        model_mode: stable_only
+      losses:
+        - type: mae
+      metrics:
+        - type: mae
+        - type: rmse

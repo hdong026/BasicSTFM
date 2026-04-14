@@ -7,8 +7,12 @@ from typing import Iterable
 
 BUILTIN_MODULES = (
     "basicstfm.data.datamodule",
+    "basicstfm.losses.disentangle_losses",
+    "basicstfm.losses.diffusion_losses",
     "basicstfm.losses.common",
+    "basicstfm.losses.stable_losses",
     "basicstfm.metrics.common",
+    "basicstfm.models.dpm_stfm",
     "basicstfm.models.mlp_forecaster",
     "basicstfm.models.st_foundation",
     "basicstfm.models.foundation",
@@ -17,6 +21,7 @@ BUILTIN_MODULES = (
     "basicstfm.tasks.joint_pretraining",
     "basicstfm.tasks.masked_forecast_completion",
     "basicstfm.tasks.masked_reconstruction",
+    "basicstfm.tasks.stable_residual_forecasting_task",
     "basicstfm.engines.trainer",
 )
 
