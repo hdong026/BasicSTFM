@@ -80,25 +80,26 @@ pipeline:
         input_len: 12
         output_len: 12
         batch_size: 8
-        train_strategy: round_robin
+        train_strategy: proportional
         eval_strategy: per_dataset
         split: [0.7, 0.1, 0.2]
         scaler:
           type: standard
       epochs: 5
+      freeze:
+        - all
+      unfreeze:
+        - stable_trunk.*
       task:
         type: StableResidualForecastingTask
         phase: stable
         model_mode: stable_pretrain
-        stable_forecast_weight: 1.0
-        stable_reconstruction_weight: 0.4
-        trend_weight: 0.2
-        low_freq_weight: 0.2
-        smoothness_weight: 0.1
-        residual_forecast_weight: 0.0
-        propagation_consistency_weight: 0.0
-        spillover_weight: 0.0
-        spectral_drift_weight: 0.05
+        stable_target: lowfreq
+        final_weight: 1.0
+        stable_weight: 0.2
+        residual_weight: 0.2
+        spectral_weight: 0.02
+        spectral_scales: [1]
       losses:
         - type: mae
           weight: 1.0
@@ -123,22 +124,20 @@ pipeline:
       strict_load: true
       epochs: 4
       freeze:
-        - stable_trunk.*
+        - all
+      unfreeze:
+        - residual_event_encoder.*
+        - diffusion_mechanism_learner.*
       task:
         type: StableResidualForecastingTask
         phase: diffusion
         model_mode: diffusion_pretrain
-        final_weight: 0.5
-        stable_forecast_weight: 0.1
-        stable_reconstruction_weight: 0.0
-        trend_weight: 0.0
-        low_freq_weight: 0.05
-        residual_forecast_weight: 1.0
-        propagation_consistency_weight: 0.2
-        spillover_weight: 0.1
-        attenuation_weight: 0.02
-        locality_weight: 0.1
-        spectral_drift_weight: 0.1
+        stable_target: lowfreq
+        final_weight: 1.0
+        stable_weight: 0.2
+        residual_weight: 0.2
+        spectral_weight: 0.02
+        spectral_scales: [1]
       losses:
         - type: mae
           weight: 1.0
@@ -166,11 +165,12 @@ pipeline:
         type: StableResidualForecastingTask
         phase: joint
         model_mode: forecast
+        stable_target: lowfreq
         final_weight: 1.0
-        stable_forecast_weight: 0.5
-        residual_forecast_weight: 0.7
-        propagation_consistency_weight: 0.1
-        spectral_drift_weight: 0.15
+        stable_weight: 0.2
+        residual_weight: 0.2
+        spectral_weight: 0.02
+        spectral_scales: [1]
       losses:
         - type: mae
           weight: 1.0
@@ -230,8 +230,12 @@ pipeline:
         type: StableResidualForecastingTask
         phase: joint
         model_mode: forecast
-        orthogonality_weight: 0.02
-        cross_cov_weight: 0.02
+        stable_target: lowfreq
+        final_weight: 1.0
+        stable_weight: 0.2
+        residual_weight: 0.2
+        spectral_weight: 0.02
+        cross_cov_weight: 0.0
       losses:
         - type: mae
           weight: 1.0
@@ -269,6 +273,11 @@ pipeline:
         type: StableResidualForecastingTask
         phase: joint
         model_mode: forecast
+        stable_target: lowfreq
+        final_weight: 1.0
+        stable_weight: 0.2
+        residual_weight: 0.2
+        spectral_weight: 0.02
       losses:
         - type: mae
       metrics:
@@ -291,6 +300,11 @@ pipeline:
         type: StableResidualForecastingTask
         phase: joint
         model_mode: forecast
+        stable_target: lowfreq
+        final_weight: 1.0
+        stable_weight: 0.2
+        residual_weight: 0.2
+        spectral_weight: 0.02
       losses:
         - type: mae
           weight: 1.0

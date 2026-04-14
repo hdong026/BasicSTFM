@@ -28,6 +28,8 @@ class FusionPredictor(nn.Module):
         )
         self.stable_confidence = nn.Linear(self.output_dim, self.output_dim)
         self.residual_confidence = nn.Linear(self.output_dim, self.output_dim)
+        # Additive fusion keeps SRD doctrine while allowing non-degenerate residual usage.
+        self.additive_logit = nn.Parameter(torch.zeros(1, 1, 1, self.output_dim))
 
     def forward(
         self,
@@ -43,8 +45,11 @@ class FusionPredictor(nn.Module):
         fusion_mode = mode or self.fusion_mode
 
         if fusion_mode == "additive":
-            forecast = stable_forecast + residual_forecast
-            fusion_weight = torch.ones_like(stable_forecast[..., :1])
+            residual_weight = torch.sigmoid(self.additive_logit)  # initialized at 0.5
+            forecast = stable_forecast + residual_weight * residual_forecast
+            fusion_weight = residual_weight.mean(dim=-1, keepdim=True).expand_as(
+                stable_forecast[..., :1]
+            )
         elif fusion_mode == "gate":
             gate = torch.sigmoid(self.gate_net(torch.cat([stable_forecast, residual_forecast], dim=-1)))
             forecast = stable_forecast + gate * residual_forecast

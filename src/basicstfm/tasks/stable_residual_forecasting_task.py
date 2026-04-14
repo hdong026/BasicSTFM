@@ -6,34 +6,11 @@ from typing import Any, Dict, Optional, Sequence
 
 import torch
 
-from basicstfm.losses.diffusion_losses import (
-    attenuation_regularization,
-    event_locality_regularization,
-    propagation_consistency_loss,
-    propagation_sparsity_loss,
-    residual_forecast_loss,
-    spillover_reconstruction_loss,
-)
-from basicstfm.losses.disentangle_losses import (
-    cross_covariance_penalty,
-    energy_allocation_regularizer,
-    mutual_exclusion_regularizer,
-    orthogonality_loss,
-)
-from basicstfm.losses.stable_losses import (
-    low_frequency_consistency_loss,
-    stable_forecast_loss,
-    temporal_smoothness_loss,
-    trend_consistency_loss,
-)
-from basicstfm.models.spectral_regularizer import (
-    anti_oversmoothing_loss,
-    anti_spectral_drift_loss,
-    residual_high_frequency_alignment,
-    stable_low_frequency_alignment,
-)
+from basicstfm.losses.disentangle_losses import cross_covariance_penalty
+from basicstfm.losses.stable_losses import stable_forecast_loss
 from basicstfm.registry import TASKS
 from basicstfm.tasks.base import Task, move_to_device
+from basicstfm.utils.spectral_ops import multi_scale_spectral_distance, split_low_high_frequency
 
 
 @TASKS.register("StableResidualForecastingTask")
@@ -48,361 +25,203 @@ class StableResidualForecastingTask(Task):
         model_mode: str = "forecast",
         phase: str = "joint",
         mask_key: Optional[str] = None,
+        stable_target: str = "lowfreq",
         final_weight: float = 1.0,
-        stable_forecast_weight: float = 0.5,
-        stable_reconstruction_weight: float = 0.2,
-        trend_weight: float = 0.1,
-        low_freq_weight: float = 0.1,
-        smoothness_weight: float = 0.05,
-        residual_forecast_weight: float = 0.6,
-        propagation_consistency_weight: float = 0.1,
-        spillover_weight: float = 0.05,
-        propagation_sparsity_weight: float = 0.01,
-        attenuation_weight: float = 0.01,
-        locality_weight: float = 0.05,
-        spectral_drift_weight: float = 0.15,
-        anti_oversmoothing_weight: float = 0.01,
-        orthogonality_weight: float = 0.05,
-        cross_cov_weight: float = 0.05,
-        energy_allocation_weight: float = 0.02,
-        mutual_exclusion_weight: float = 0.02,
-        low_ratio: float = 0.25,
+        stable_weight: float = 0.2,
+        residual_weight: float = 0.2,
+        spectral_weight: float = 0.02,
         spectral_scales: Optional[Sequence[int]] = None,
+        log_interval: int = 200,
+        # Disabled by default in the current repair phase.
+        cross_cov_weight: float = 0.0,
     ) -> None:
         self.input_key = input_key
         self.target_key = target_key
         self.output_key = output_key
         self.model_mode = model_mode
-        self.phase = phase
+        self.phase = str(phase)
         self.mask_key = mask_key
 
+        if stable_target not in {"lowfreq", "target"}:
+            raise ValueError("stable_target must be one of: lowfreq, target")
+        self.stable_target = stable_target
+
         self.final_weight = float(final_weight)
-        self.stable_forecast_weight = float(stable_forecast_weight)
-        self.stable_reconstruction_weight = float(stable_reconstruction_weight)
-        self.trend_weight = float(trend_weight)
-        self.low_freq_weight = float(low_freq_weight)
-        self.smoothness_weight = float(smoothness_weight)
+        self.stable_weight = float(stable_weight)
+        self.residual_weight = float(residual_weight)
+        self.spectral_weight = float(spectral_weight)
+        self.spectral_scales = tuple(int(item) for item in (spectral_scales or (1,)))
 
-        self.residual_forecast_weight = float(residual_forecast_weight)
-        self.propagation_consistency_weight = float(propagation_consistency_weight)
-        self.spillover_weight = float(spillover_weight)
-        self.propagation_sparsity_weight = float(propagation_sparsity_weight)
-        self.attenuation_weight = float(attenuation_weight)
-        self.locality_weight = float(locality_weight)
-
-        self.spectral_drift_weight = float(spectral_drift_weight)
-        self.anti_oversmoothing_weight = float(anti_oversmoothing_weight)
-
-        self.orthogonality_weight = float(orthogonality_weight)
         self.cross_cov_weight = float(cross_cov_weight)
-        self.energy_allocation_weight = float(energy_allocation_weight)
-        self.mutual_exclusion_weight = float(mutual_exclusion_weight)
+        self.log_interval = max(1, int(log_interval))
+        self._step_counter = 0
 
-        self.low_ratio = float(low_ratio)
-        self.spectral_scales = tuple(int(item) for item in (spectral_scales or (1, 2, 4)))
+    def _phase_weights(self) -> tuple[float, float, float, float]:
+        if self.phase == "stable":
+            # Stage 1: train stable branch only.
+            return 0.0, 1.0, 0.0, 0.0
+        if self.phase == "diffusion":
+            # Stage 2: frozen stable, train residual diffusion with oracle residual target.
+            return 0.0, 0.0, 1.0, 0.0
+        if self.phase in {"joint", "scratch"}:
+            # Stage 3 / control: minimal trainable objective.
+            return self.final_weight, self.stable_weight, self.residual_weight, self.spectral_weight
+        if self.phase == "stable_only":
+            return 1.0, 0.2, 0.0, 0.02
+        return self.final_weight, self.stable_weight, self.residual_weight, self.spectral_weight
 
-    def _phase_factor(self, category: str) -> float:
-        table = {
-            "stable": {
-                "final": 0.4,
-                "stable": 1.0,
-                "diffusion": 0.0,
-                "spectral": 0.6,
-                "disentangle": 0.2,
-            },
-            "diffusion": {
-                "final": 0.6,
-                "stable": 0.1,
-                "diffusion": 1.0,
-                "spectral": 0.8,
-                "disentangle": 0.6,
-            },
-            "stable_only": {
-                "final": 1.0,
-                "stable": 1.0,
-                "diffusion": 0.0,
-                "spectral": 0.6,
-                "disentangle": 0.0,
-            },
-            "joint": {
-                "final": 1.0,
-                "stable": 1.0,
-                "diffusion": 1.0,
-                "spectral": 1.0,
-                "disentangle": 1.0,
-            },
-            "scratch": {
-                "final": 1.0,
-                "stable": 1.0,
-                "diffusion": 1.0,
-                "spectral": 1.0,
-                "disentangle": 1.0,
-            },
-        }
-        phase = self.phase if self.phase in table else "joint"
-        return table[phase][category]
-
-    def _add_weighted(
+    def _align_pred_target(
         self,
-        total: torch.Tensor,
-        logs: Dict[str, torch.Tensor],
+        pred: torch.Tensor,
+        target: torch.Tensor,
+        mask: Any,
+    ) -> tuple[torch.Tensor, torch.Tensor, Any]:
+        aligned_target, aligned_mask = self.align_prediction_target(pred, target, mask)
+        aligned_pred = pred
+        if pred.shape[-1] > aligned_target.shape[-1]:
+            aligned_pred = pred[..., : aligned_target.shape[-1]]
+        elif pred.shape[-1] < aligned_target.shape[-1]:
+            pad_channels = aligned_target.shape[-1] - pred.shape[-1]
+            aligned_pred = torch.cat(
+                [pred, pred.new_zeros(*pred.shape[:-1], pad_channels)],
+                dim=-1,
+            )
+        return aligned_pred, aligned_target, aligned_mask
+
+    @staticmethod
+    def _stats(value: torch.Tensor) -> Dict[str, torch.Tensor]:
+        value = value.detach()
+        return {
+            "mean": value.mean(),
+            "std": value.std(unbiased=False),
+            "min": value.min(),
+            "max": value.max(),
+        }
+
+    def _maybe_log_tensor_stats(self, logs: Dict[str, torch.Tensor], name: str, value: torch.Tensor) -> None:
+        stats = self._stats(value)
+        for stat_name, stat_value in stats.items():
+            logs[f"debug/{name}/{stat_name}"] = stat_value
+
+    def _maybe_print_key_stats(
+        self,
         *,
-        key: str,
-        value: torch.Tensor,
-        weight: float,
-        factor: float,
-    ) -> torch.Tensor:
-        logs[key] = value.detach()
-        weighted = float(weight) * float(factor)
-        if weighted <= 0.0:
-            return total
-        total = total + value * weighted
-        logs[f"{key}/weighted"] = (value * weighted).detach()
-        return total
+        y: torch.Tensor,
+        y_stable: torch.Tensor,
+        y_residual: torch.Tensor,
+        y_hat: torch.Tensor,
+        residual_target: torch.Tensor,
+    ) -> None:
+        if self._step_counter % self.log_interval != 0:
+            return
+
+        def fmt(name: str, tensor: torch.Tensor) -> str:
+            s = self._stats(tensor)
+            return (
+                f"{name}(mean={float(s['mean']):.4f}, std={float(s['std']):.4f}, "
+                f"min={float(s['min']):.4f}, max={float(s['max']):.4f})"
+            )
+
+        print(
+            "[SRD-DEBUG] "
+            f"step={self._step_counter} phase={self.phase} "
+            f"{fmt('y', y)} {fmt('y_stable', y_stable)} {fmt('y_residual', y_residual)} "
+            f"{fmt('y_hat', y_hat)} {fmt('residual_target', residual_target)}"
+        )
 
     def step(self, model: torch.nn.Module, batch: Dict[str, Any], losses, device: torch.device):
+        del losses
+        self._step_counter += 1
+
         batch = move_to_device(batch, device)
         raw_x = batch[self.input_key]
         raw_target = batch[self.target_key]
-        x = self.transform(raw_x, batch=batch)
-        target_scaled = self.transform(raw_target, batch=batch)
+
+        # Training losses are computed in normalized space.
+        x_scaled = self.transform(raw_x, batch=batch)
+        y_scaled = self.transform(raw_target, batch=batch)
 
         outputs = model(
-            x,
+            x_scaled,
             graph=batch.get("graph"),
             mode=self.model_mode,
             dataset_index=batch.get("dataset_index"),
-            target=target_scaled,
+            target=y_scaled,
         )
         if not isinstance(outputs, dict):
             raise TypeError("StableResidualForecastingTask expects model outputs to be a dict")
 
-        pred_scaled = outputs[self.output_key]
-        pred = self.inverse_transform(pred_scaled, batch=batch)
-        mask = self.merge_masks(
+        y_hat_scaled = outputs[self.output_key]
+        y_stable_scaled = outputs["stable_forecast"]
+        y_residual_scaled = outputs["residual_forecast"]
+
+        raw_mask = self.merge_masks(
             batch.get("y_mask"),
             batch.get(self.mask_key) if self.mask_key else None,
         )
-        target, mask = self.align_prediction_target(pred, raw_target, mask)
 
-        loss_out = losses(pred, target, mask=mask)
-        logs: Dict[str, torch.Tensor] = dict(loss_out["logs"])
-        total = pred.new_tensor(0.0)
-        total = self._add_weighted(
-            total,
-            logs,
-            key="loss/final",
-            value=loss_out["loss"],
-            weight=self.final_weight,
-            factor=self._phase_factor("final"),
-        )
+        y_hat_scaled, y_scaled, loss_mask = self._align_pred_target(y_hat_scaled, y_scaled, raw_mask)
+        y_stable_scaled, _, _ = self._align_pred_target(y_stable_scaled, y_scaled, loss_mask)
+        y_residual_scaled, _, _ = self._align_pred_target(y_residual_scaled, y_scaled, loss_mask)
 
-        stable_pred = self.inverse_transform(outputs["stable_forecast"], batch=batch)
-        stable_target, stable_mask = self.align_prediction_target(stable_pred, target, mask)
-        stable_loss = stable_forecast_loss(stable_pred, stable_target, mask=stable_mask)
-        trend_loss = trend_consistency_loss(stable_pred, stable_target, mask=stable_mask)
-        low_freq_loss = low_frequency_consistency_loss(stable_pred, stable_target, low_ratio=self.low_ratio)
-        smooth_loss = temporal_smoothness_loss(stable_pred, mask=stable_mask)
+        if self.stable_target == "lowfreq":
+            stable_target_scaled, _ = split_low_high_frequency(y_scaled, low_ratio=0.3)
+        else:
+            stable_target_scaled = y_scaled
 
-        stable_reconstruction = self.inverse_transform(outputs["stable_reconstruction"], batch=batch)
-        recon_target, recon_mask = self.align_prediction_target(
-            stable_reconstruction,
-            raw_x,
-            self.merge_masks(batch.get("x_mask")),
-        )
-        reconstruction_loss = stable_forecast_loss(
-            stable_reconstruction,
-            recon_target,
-            mask=recon_mask,
+        residual_target_scaled = y_scaled - y_stable_scaled.detach()
+
+        # Minimal trainable objective (repair mode):
+        # L = L_final + 0.2 * L_stable + 0.2 * L_residual + 0.02 * L_spec
+        # TODO: keep propagation/event/disentangle auxiliary losses disabled until
+        # diffusion branch activation and MAE scale are stable.
+        l_final = stable_forecast_loss(y_hat_scaled, y_scaled, mask=loss_mask)
+        l_stable = stable_forecast_loss(y_stable_scaled, stable_target_scaled, mask=loss_mask)
+        l_residual = stable_forecast_loss(y_residual_scaled, residual_target_scaled, mask=loss_mask)
+        l_spec = multi_scale_spectral_distance(
+            y_hat_scaled,
+            y_scaled,
+            scales=self.spectral_scales,
+            log_amplitude=True,
         )
 
-        stable_factor = self._phase_factor("stable")
-        total = self._add_weighted(
-            total,
-            logs,
-            key="loss/stable_forecast",
-            value=stable_loss,
-            weight=self.stable_forecast_weight,
-            factor=stable_factor,
-        )
-        total = self._add_weighted(
-            total,
-            logs,
-            key="loss/stable_reconstruction",
-            value=reconstruction_loss,
-            weight=self.stable_reconstruction_weight,
-            factor=stable_factor,
-        )
-        total = self._add_weighted(
-            total,
-            logs,
-            key="loss/trend_consistency",
-            value=trend_loss,
-            weight=self.trend_weight,
-            factor=stable_factor,
-        )
-        total = self._add_weighted(
-            total,
-            logs,
-            key="loss/low_frequency",
-            value=low_freq_loss,
-            weight=self.low_freq_weight,
-            factor=stable_factor,
-        )
-        total = self._add_weighted(
-            total,
-            logs,
-            key="loss/temporal_smoothness",
-            value=smooth_loss,
-            weight=self.smoothness_weight,
-            factor=stable_factor,
+        w_final, w_stable, w_residual, w_spec = self._phase_weights()
+        total = (
+            w_final * l_final
+            + w_stable * l_stable
+            + w_residual * l_residual
+            + w_spec * l_spec
         )
 
-        residual_pred = self.inverse_transform(outputs["residual_forecast"], batch=batch)
-        residual_target = target - stable_pred.detach()
-        residual_target, residual_mask = self.align_prediction_target(residual_pred, residual_target, mask)
+        logs: Dict[str, torch.Tensor] = {
+            "loss/final": l_final.detach(),
+            "loss/stable": l_stable.detach(),
+            "loss/residual": l_residual.detach(),
+            "loss/spec": l_spec.detach(),
+            "loss/final/weighted": (w_final * l_final).detach(),
+            "loss/stable/weighted": (w_stable * l_stable).detach(),
+            "loss/residual/weighted": (w_residual * l_residual).detach(),
+            "loss/spec/weighted": (w_spec * l_spec).detach(),
+        }
 
-        diffusion_factor = self._phase_factor("diffusion")
-        residual_loss = residual_forecast_loss(residual_pred, residual_target, mask=residual_mask)
-        propagation_loss = propagation_consistency_loss(residual_pred, outputs["propagation_map"])
-        spillover_loss = spillover_reconstruction_loss(outputs["spillover_gate"], residual_target)
-        sparsity_loss = propagation_sparsity_loss(outputs["propagation_map"])
-        attenuation_loss = attenuation_regularization(outputs["attenuation_gate"], target_decay=0.6)
-        locality_loss = event_locality_regularization(outputs["event_score"], outputs["event_locality"])
+        # TODO: keep disabled in current repair phase to avoid scale pollution.
+        # If re-enabled, only standardized implementation should be used.
+        if self.cross_cov_weight > 0.0:
+            l_cross_cov = cross_covariance_penalty(y_stable_scaled, y_residual_scaled)
+            total = total + self.cross_cov_weight * l_cross_cov
+            logs["loss/cross_covariance"] = l_cross_cov.detach()
+            logs["loss/cross_covariance/weighted"] = (
+                self.cross_cov_weight * l_cross_cov
+            ).detach()
 
-        total = self._add_weighted(
-            total,
-            logs,
-            key="loss/residual_forecast",
-            value=residual_loss,
-            weight=self.residual_forecast_weight,
-            factor=diffusion_factor,
-        )
-        total = self._add_weighted(
-            total,
-            logs,
-            key="loss/propagation_consistency",
-            value=propagation_loss,
-            weight=self.propagation_consistency_weight,
-            factor=diffusion_factor,
-        )
-        total = self._add_weighted(
-            total,
-            logs,
-            key="loss/spillover",
-            value=spillover_loss,
-            weight=self.spillover_weight,
-            factor=diffusion_factor,
-        )
-        total = self._add_weighted(
-            total,
-            logs,
-            key="loss/propagation_sparsity",
-            value=sparsity_loss,
-            weight=self.propagation_sparsity_weight,
-            factor=diffusion_factor,
-        )
-        total = self._add_weighted(
-            total,
-            logs,
-            key="loss/attenuation_regularization",
-            value=attenuation_loss,
-            weight=self.attenuation_weight,
-            factor=diffusion_factor,
-        )
-        total = self._add_weighted(
-            total,
-            logs,
-            key="loss/event_locality",
-            value=locality_loss,
-            weight=self.locality_weight,
-            factor=diffusion_factor,
-        )
+        # Required scale/space debug statistics.
+        self._maybe_log_tensor_stats(logs, "y", y_scaled)
+        self._maybe_log_tensor_stats(logs, "y_stable", y_stable_scaled)
+        self._maybe_log_tensor_stats(logs, "y_residual", y_residual_scaled)
+        self._maybe_log_tensor_stats(logs, "y_hat", y_hat_scaled)
+        self._maybe_log_tensor_stats(logs, "residual_target", residual_target_scaled)
 
-        spectral_factor = self._phase_factor("spectral")
-        stable_low = stable_low_frequency_alignment(stable_pred, target, low_ratio=self.low_ratio)
-        residual_high = residual_high_frequency_alignment(
-            residual_pred,
-            residual_target,
-            low_ratio=self.low_ratio,
-        )
-        spectral_drift = anti_spectral_drift_loss(pred, target, scales=self.spectral_scales)
-        anti_smooth = anti_oversmoothing_loss(pred)
-
-        total = self._add_weighted(
-            total,
-            logs,
-            key="loss/stable_low_frequency_alignment",
-            value=stable_low,
-            weight=self.low_freq_weight,
-            factor=spectral_factor,
-        )
-        total = self._add_weighted(
-            total,
-            logs,
-            key="loss/residual_high_frequency_alignment",
-            value=residual_high,
-            weight=self.residual_forecast_weight,
-            factor=spectral_factor,
-        )
-        total = self._add_weighted(
-            total,
-            logs,
-            key="loss/anti_spectral_drift",
-            value=spectral_drift,
-            weight=self.spectral_drift_weight,
-            factor=spectral_factor,
-        )
-        total = self._add_weighted(
-            total,
-            logs,
-            key="loss/anti_oversmoothing",
-            value=anti_smooth,
-            weight=self.anti_oversmoothing_weight,
-            factor=spectral_factor,
-        )
-
-        disentangle_factor = self._phase_factor("disentangle")
-        orth_loss = orthogonality_loss(stable_pred, residual_pred)
-        cov_loss = cross_covariance_penalty(stable_pred, residual_pred)
-        energy_loss = energy_allocation_regularizer(stable_pred, residual_pred, target_stable_ratio=0.7)
-        exclusion_loss = mutual_exclusion_regularizer(stable_pred, residual_pred)
-
-        total = self._add_weighted(
-            total,
-            logs,
-            key="loss/orthogonality",
-            value=orth_loss,
-            weight=self.orthogonality_weight,
-            factor=disentangle_factor,
-        )
-        total = self._add_weighted(
-            total,
-            logs,
-            key="loss/cross_covariance",
-            value=cov_loss,
-            weight=self.cross_cov_weight,
-            factor=disentangle_factor,
-        )
-        total = self._add_weighted(
-            total,
-            logs,
-            key="loss/energy_allocation",
-            value=energy_loss,
-            weight=self.energy_allocation_weight,
-            factor=disentangle_factor,
-        )
-        total = self._add_weighted(
-            total,
-            logs,
-            key="loss/mutual_exclusion",
-            value=exclusion_loss,
-            weight=self.mutual_exclusion_weight,
-            factor=disentangle_factor,
-        )
-
-        debug_keys = [
-            "residual_energy",
+        gate_keys = [
             "event_activation",
             "diffusion_gate",
             "inertia_gate",
@@ -410,16 +229,28 @@ class StableResidualForecastingTask(Task):
             "propagation_map",
             "fusion_weight",
         ]
-        for key in debug_keys:
+        for key in gate_keys:
             value = outputs.get(key)
             if isinstance(value, torch.Tensor):
-                logs[f"debug/{key}"] = value.detach().mean()
+                logs[f"debug/{key}/mean"] = value.detach().mean()
+
+        self._maybe_print_key_stats(
+            y=y_scaled,
+            y_stable=y_stable_scaled,
+            y_residual=y_residual_scaled,
+            y_hat=y_hat_scaled,
+            residual_target=residual_target_scaled,
+        )
 
         logs["loss/total"] = total.detach()
+
+        # Metrics are computed in denormalized space.
+        pred = self.inverse_transform(y_hat_scaled, batch=batch)
+        pred, target_denorm, metric_mask = self._align_pred_target(pred, raw_target, raw_mask)
         return {
             "loss": total,
             "logs": logs,
             "pred": pred.detach(),
-            "target": target.detach(),
-            "mask": None if mask is None else mask.detach(),
+            "target": target_denorm.detach(),
+            "mask": None if metric_mask is None else metric_mask.detach(),
         }

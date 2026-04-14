@@ -28,14 +28,32 @@ def orthogonality_loss(stable_component: torch.Tensor, residual_component: torch
 
 
 def cross_covariance_penalty(stable_component: torch.Tensor, residual_component: torch.Tensor) -> torch.Tensor:
-    """Penalize cross-covariance between stable and residual activations."""
+    """Penalize standardized cross-covariance off-diagonal terms.
 
-    stable_vec = _flatten(stable_component)
-    residual_vec = _flatten(residual_component)
-    stable_centered = stable_vec - stable_vec.mean(dim=-1, keepdim=True)
-    residual_centered = residual_vec - residual_vec.mean(dim=-1, keepdim=True)
-    covariance = (stable_centered * residual_centered).mean(dim=-1)
-    return covariance.pow(2).mean()
+    Implementation notes:
+      1) center over batch;
+      2) normalize by batch sample count;
+      3) keep only off-diagonal terms.
+    """
+
+    stable = ensure_4d(stable_component).mean(dim=(1, 2))    # [B, C]
+    residual = ensure_4d(residual_component).mean(dim=(1, 2))  # [B, C]
+    if stable.shape != residual.shape:
+        raise ValueError(f"Shape mismatch: {tuple(stable.shape)} vs {tuple(residual.shape)}")
+    if stable.shape[0] < 2:
+        return stable.new_tensor(0.0)
+
+    stable = stable - stable.mean(dim=0, keepdim=True)
+    residual = residual - residual.mean(dim=0, keepdim=True)
+
+    # Standardize channel scale to keep loss magnitude stable.
+    stable = stable / stable.std(dim=0, keepdim=True).clamp_min(EPS)
+    residual = residual / residual.std(dim=0, keepdim=True).clamp_min(EPS)
+
+    cov = stable.t().matmul(residual) / float(stable.shape[0] - 1)  # [C, C]
+    diag = torch.diagonal(cov, dim1=0, dim2=1)
+    off_diag = cov - torch.diag_embed(diag)
+    return off_diag.pow(2).mean()
 
 
 def energy_allocation_regularizer(

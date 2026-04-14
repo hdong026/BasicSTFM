@@ -42,12 +42,12 @@ pipeline:
         type: StableResidualForecastingTask
         phase: joint
         model_mode: forecast
-        orthogonality_weight: 0.0
+        stable_target: target
+        final_weight: 1.0
+        stable_weight: 0.2
+        residual_weight: 0.2
+        spectral_weight: 0.0
         cross_cov_weight: 0.0
-        energy_allocation_weight: 0.0
-        mutual_exclusion_weight: 0.0
-        spectral_drift_weight: 0.0
-        anti_oversmoothing_weight: 0.0
       losses:
         - type: mae
           weight: 1.0
@@ -75,10 +75,12 @@ pipeline:
         type: StableResidualForecastingTask
         phase: joint
         model_mode: forecast
-        orthogonality_weight: 0.0
+        stable_target: target
+        final_weight: 1.0
+        stable_weight: 0.2
+        residual_weight: 0.2
+        spectral_weight: 0.0
         cross_cov_weight: 0.0
-        energy_allocation_weight: 0.0
-        mutual_exclusion_weight: 0.0
       losses:
         - type: mae
       metrics:

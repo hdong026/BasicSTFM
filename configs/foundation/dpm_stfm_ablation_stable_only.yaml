@@ -40,15 +40,12 @@ pipeline:
         type: StableResidualForecastingTask
         phase: stable_only
         model_mode: stable_only
-        stable_forecast_weight: 1.0
-        stable_reconstruction_weight: 0.5
-        residual_forecast_weight: 0.0
-        propagation_consistency_weight: 0.0
-        spillover_weight: 0.0
-        orthogonality_weight: 0.0
+        stable_target: lowfreq
+        final_weight: 1.0
+        stable_weight: 0.2
+        residual_weight: 0.0
+        spectral_weight: 0.02
         cross_cov_weight: 0.0
-        energy_allocation_weight: 0.0
-        mutual_exclusion_weight: 0.0
       losses:
         - type: mae
           weight: 1.0

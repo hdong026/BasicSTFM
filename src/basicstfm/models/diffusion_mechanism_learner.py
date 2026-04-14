@@ -40,6 +40,7 @@ class DiffusionMechanismLearner(nn.Module):
 
         gate_dim = self.hidden_dim * 2
         self.activation_gate = nn.Linear(gate_dim, 1)
+        self.diffusion_gate = nn.Linear(gate_dim, 1)
         self.inertia_gate = nn.Linear(gate_dim, 1)
         self.attenuation_gate = nn.Linear(gate_dim, 1)
         self.spillover_gate = nn.Linear(gate_dim, 1)
@@ -53,6 +54,28 @@ class DiffusionMechanismLearner(nn.Module):
         self.state_norm = nn.LayerNorm(self.hidden_dim)
         self.state_dropout = nn.Dropout(float(diffusion_dropout))
         self.output_proj = nn.Linear(self.hidden_dim, self.output_dim)
+        self._reset_gate_parameters()
+
+    def _reset_gate_parameters(self) -> None:
+        nn.init.xavier_uniform_(self.activation_gate.weight)
+        nn.init.xavier_uniform_(self.diffusion_gate.weight)
+        nn.init.xavier_uniform_(self.inertia_gate.weight)
+        nn.init.xavier_uniform_(self.attenuation_gate.weight)
+        nn.init.xavier_uniform_(self.spillover_gate.weight)
+
+        # Gate priors to prevent diffusion-branch death in early optimization.
+        self._set_gate_bias(self.activation_gate, 0.73)   # ~= sigmoid(1.0)
+        self._set_gate_bias(self.diffusion_gate, 0.40)    # target 0.3~0.5
+        self._set_gate_bias(self.inertia_gate, 0.50)      # target 0.5
+        self._set_gate_bias(self.attenuation_gate, 0.85)  # target 0.8~0.9
+        self._set_gate_bias(self.spillover_gate, 0.40)
+
+    @staticmethod
+    def _set_gate_bias(layer: nn.Linear, target_mean: float) -> None:
+        target = float(target_mean)
+        target = min(max(target, 1e-4), 1.0 - 1e-4)
+        bias = math.log(target / (1.0 - target))
+        nn.init.constant_(layer.bias, bias)
 
     def _static_graph(
         self,
@@ -76,6 +99,7 @@ class DiffusionMechanismLearner(nn.Module):
         state: torch.Tensor,
         static_graph: torch.Tensor,
         activation: torch.Tensor,
+        diffusion_gate: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         source = self.source_proj(state)
         target = self.target_proj(state)
@@ -84,6 +108,8 @@ class DiffusionMechanismLearner(nn.Module):
         dynamic_graph = torch.sigmoid(logits)
 
         propagation_strength = dynamic_graph * static_graph.unsqueeze(0)
+        edge_gate = diffusion_gate.expand(-1, -1, state.shape[1])
+        propagation_strength = propagation_strength * edge_gate
         propagated = torch.einsum(
             "bij,bjd->bid",
             propagation_strength,
@@ -126,6 +152,7 @@ class DiffusionMechanismLearner(nn.Module):
 
         forecasts = []
         activation_steps = []
+        diffusion_steps = []
         inertia_steps = []
         attenuation_steps = []
         spillover_steps = []
@@ -135,6 +162,7 @@ class DiffusionMechanismLearner(nn.Module):
         for _ in range(output_len):
             gate_input = torch.cat([state, base_drive], dim=-1)
             activation = torch.sigmoid(self.activation_gate(gate_input))
+            diffusion_gate = torch.sigmoid(self.diffusion_gate(gate_input))
             if self.use_inertia_gate:
                 inertia = torch.sigmoid(self.inertia_gate(gate_input))
             else:
@@ -149,6 +177,7 @@ class DiffusionMechanismLearner(nn.Module):
                 state,
                 static_graph=static_graph,
                 activation=activation,
+                diffusion_gate=diffusion_gate,
             )
 
             self_drive = inertia * state + (1.0 - inertia) * base_drive
@@ -159,6 +188,7 @@ class DiffusionMechanismLearner(nn.Module):
 
             forecasts.append(self.output_proj(state))
             activation_steps.append(activation)
+            diffusion_steps.append(diffusion_gate)
             inertia_steps.append(inertia)
             attenuation_steps.append(attenuation)
             spillover_steps.append(spillover)
@@ -168,11 +198,11 @@ class DiffusionMechanismLearner(nn.Module):
         return {
             "residual_forecast": residual_forecast,
             "event_activation": torch.stack(activation_steps, dim=1),
+            "diffusion_gate": torch.stack(diffusion_steps, dim=1),
             "inertia_gate": torch.stack(inertia_steps, dim=1),
             "attenuation_gate": torch.stack(attenuation_steps, dim=1),
             "spillover_gate": torch.stack(spillover_steps, dim=1),
             "propagation_map": torch.stack(propagation_steps, dim=1),
-            "diffusion_gate": torch.stack(propagation_steps, dim=1),
             "dataset_gamma": modulation["gamma"],
             "dataset_beta": modulation["beta"],
         }

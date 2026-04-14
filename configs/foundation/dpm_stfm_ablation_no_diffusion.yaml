@@ -40,12 +40,12 @@ pipeline:
         type: StableResidualForecastingTask
         phase: joint
         model_mode: forecast
-        residual_forecast_weight: 0.0
-        propagation_consistency_weight: 0.0
-        spillover_weight: 0.0
-        propagation_sparsity_weight: 0.0
-        attenuation_weight: 0.0
-        locality_weight: 0.0
+        stable_target: lowfreq
+        final_weight: 1.0
+        stable_weight: 0.2
+        residual_weight: 0.0
+        spectral_weight: 0.02
+        cross_cov_weight: 0.0
       losses:
         - type: mae
           weight: 1.0

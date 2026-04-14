@@ -18,7 +18,7 @@ class ResidualEventEncoder(nn.Module):
         self,
         input_dim: int,
         hidden_dim: int,
-        activation_bias: float = 0.0,
+        activation_bias: float = 1.0,
     ) -> None:
         super().__init__()
         self.input_dim = int(input_dim)
@@ -75,7 +75,8 @@ class ResidualEventEncoder(nn.Module):
         locality = torch.sigmoid(self.locality_head(event_latent) + locality_raw)
 
         propagation_worthiness = score * intensity * locality
-        filtered_event = event_latent * propagation_worthiness
+        # Keep a residual path to avoid early-stage event-latent collapse.
+        filtered_event = event_latent * (1.0 + propagation_worthiness)
 
         return {
             "event_latent": filtered_event,

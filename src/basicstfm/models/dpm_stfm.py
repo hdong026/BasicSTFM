@@ -205,11 +205,11 @@ class SRDSTFMBackbone(nn.Module):
             diffusion = {
                 "residual_forecast": residual_forecast,
                 "event_activation": zeros_gate,
+                "diffusion_gate": zeros_gate,
                 "inertia_gate": zeros_gate,
                 "attenuation_gate": zeros_gate,
                 "spillover_gate": zeros_gate,
                 "propagation_map": zeros_map,
-                "diffusion_gate": zeros_map,
                 "dataset_gamma": stable_forecast.new_zeros(stable_forecast.shape[0], self.hidden_dim),
                 "dataset_beta": stable_forecast.new_zeros(stable_forecast.shape[0], self.hidden_dim),
             }

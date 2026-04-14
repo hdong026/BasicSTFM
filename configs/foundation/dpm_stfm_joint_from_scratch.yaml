@@ -64,7 +64,7 @@ pipeline:
         input_len: 12
         output_len: 12
         batch_size: 8
-        train_strategy: round_robin
+        train_strategy: proportional
         eval_strategy: per_dataset
         split: [0.7, 0.1, 0.2]
         scaler:
@@ -74,6 +74,12 @@ pipeline:
         type: StableResidualForecastingTask
         phase: scratch
         model_mode: forecast
+        stable_target: lowfreq
+        final_weight: 1.0
+        stable_weight: 0.2
+        residual_weight: 0.2
+        spectral_weight: 0.02
+        spectral_scales: [1]
       losses:
         - type: mae
           weight: 1.0
@@ -111,6 +117,11 @@ pipeline:
         type: StableResidualForecastingTask
         phase: joint
         model_mode: forecast
+        stable_target: lowfreq
+        final_weight: 1.0
+        stable_weight: 0.2
+        residual_weight: 0.2
+        spectral_weight: 0.02
       losses:
         - type: mae
       metrics:
@@ -133,6 +144,11 @@ pipeline:
         type: StableResidualForecastingTask
         phase: joint
         model_mode: forecast
+        stable_target: lowfreq
+        final_weight: 1.0
+        stable_weight: 0.2
+        residual_weight: 0.2
+        spectral_weight: 0.02
       losses:
         - type: mae
           weight: 1.0
