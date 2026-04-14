@@ -32,6 +32,9 @@ class StableResidualForecastingTask(Task):
         spectral_weight: float = 0.02,
         spectral_scales: Optional[Sequence[int]] = None,
         log_interval: int = 200,
+        log_aux_losses: bool = False,
+        log_debug_tensors: bool = False,
+        print_debug: bool = False,
         # Disabled by default in the current repair phase.
         cross_cov_weight: float = 0.0,
     ) -> None:
@@ -54,6 +57,9 @@ class StableResidualForecastingTask(Task):
 
         self.cross_cov_weight = float(cross_cov_weight)
         self.log_interval = max(1, int(log_interval))
+        self.log_aux_losses = bool(log_aux_losses)
+        self.log_debug_tensors = bool(log_debug_tensors)
+        self.print_debug = bool(print_debug)
         self._step_counter = 0
 
     def _phase_weights(self) -> tuple[float, float, float, float]:
@@ -130,7 +136,6 @@ class StableResidualForecastingTask(Task):
         )
 
     def step(self, model: torch.nn.Module, batch: Dict[str, Any], losses, device: torch.device):
-        del losses
         self._step_counter += 1
 
         batch = move_to_device(batch, device)
@@ -171,11 +176,13 @@ class StableResidualForecastingTask(Task):
 
         residual_target_scaled = y_scaled - y_stable_scaled.detach()
 
-        # Minimal trainable objective (repair mode):
-        # L = L_final + 0.2 * L_stable + 0.2 * L_residual + 0.02 * L_spec
-        # TODO: keep propagation/event/disentangle auxiliary losses disabled until
-        # diffusion branch activation and MAE scale are stable.
-        l_final = stable_forecast_loss(y_hat_scaled, y_scaled, mask=loss_mask)
+        # Keep the primary supervised term aligned with the standard forecasting recipes:
+        # denormalized prediction + configured MAE/MSE collection.
+        pred = self.inverse_transform(y_hat_scaled, batch=batch)
+        pred, target_denorm, metric_mask = self._align_pred_target(pred, raw_target, raw_mask)
+        main_loss_out = losses(pred, target_denorm, mask=metric_mask)
+
+        l_final = main_loss_out["loss"]
         l_stable = stable_forecast_loss(y_stable_scaled, stable_target_scaled, mask=loss_mask)
         l_residual = stable_forecast_loss(y_residual_scaled, residual_target_scaled, mask=loss_mask)
         l_spec = multi_scale_spectral_distance(
@@ -193,60 +200,61 @@ class StableResidualForecastingTask(Task):
             + w_spec * l_spec
         )
 
-        logs: Dict[str, torch.Tensor] = {
-            "loss/final": l_final.detach(),
-            "loss/stable": l_stable.detach(),
-            "loss/residual": l_residual.detach(),
-            "loss/spec": l_spec.detach(),
-            "loss/final/weighted": (w_final * l_final).detach(),
-            "loss/stable/weighted": (w_stable * l_stable).detach(),
-            "loss/residual/weighted": (w_residual * l_residual).detach(),
-            "loss/spec/weighted": (w_spec * l_spec).detach(),
-        }
+        logs: Dict[str, torch.Tensor] = dict(main_loss_out["logs"])
+
+        if self.log_aux_losses:
+            logs.update(
+                {
+                    "aux/stable": l_stable.detach(),
+                    "aux/residual": l_residual.detach(),
+                    "aux/spec": l_spec.detach(),
+                    "aux/stable/weighted": (w_stable * l_stable).detach(),
+                    "aux/residual/weighted": (w_residual * l_residual).detach(),
+                    "aux/spec/weighted": (w_spec * l_spec).detach(),
+                }
+            )
 
         # TODO: keep disabled in current repair phase to avoid scale pollution.
         # If re-enabled, only standardized implementation should be used.
         if self.cross_cov_weight > 0.0:
             l_cross_cov = cross_covariance_penalty(y_stable_scaled, y_residual_scaled)
             total = total + self.cross_cov_weight * l_cross_cov
-            logs["loss/cross_covariance"] = l_cross_cov.detach()
-            logs["loss/cross_covariance/weighted"] = (
-                self.cross_cov_weight * l_cross_cov
-            ).detach()
+            if self.log_aux_losses:
+                logs["aux/cross_covariance"] = l_cross_cov.detach()
+                logs["aux/cross_covariance/weighted"] = (
+                    self.cross_cov_weight * l_cross_cov
+                ).detach()
 
-        # Required scale/space debug statistics.
-        self._maybe_log_tensor_stats(logs, "y", y_scaled)
-        self._maybe_log_tensor_stats(logs, "y_stable", y_stable_scaled)
-        self._maybe_log_tensor_stats(logs, "y_residual", y_residual_scaled)
-        self._maybe_log_tensor_stats(logs, "y_hat", y_hat_scaled)
-        self._maybe_log_tensor_stats(logs, "residual_target", residual_target_scaled)
+        if self.log_debug_tensors:
+            self._maybe_log_tensor_stats(logs, "y", y_scaled)
+            self._maybe_log_tensor_stats(logs, "y_stable", y_stable_scaled)
+            self._maybe_log_tensor_stats(logs, "y_residual", y_residual_scaled)
+            self._maybe_log_tensor_stats(logs, "y_hat", y_hat_scaled)
+            self._maybe_log_tensor_stats(logs, "residual_target", residual_target_scaled)
 
-        gate_keys = [
-            "event_activation",
-            "diffusion_gate",
-            "inertia_gate",
-            "attenuation_gate",
-            "propagation_map",
-            "fusion_weight",
-        ]
-        for key in gate_keys:
-            value = outputs.get(key)
-            if isinstance(value, torch.Tensor):
-                logs[f"debug/{key}/mean"] = value.detach().mean()
+            gate_keys = [
+                "event_activation",
+                "diffusion_gate",
+                "inertia_gate",
+                "attenuation_gate",
+                "propagation_map",
+                "fusion_weight",
+            ]
+            for key in gate_keys:
+                value = outputs.get(key)
+                if isinstance(value, torch.Tensor):
+                    logs[f"debug/{key}/mean"] = value.detach().mean()
 
-        self._maybe_print_key_stats(
-            y=y_scaled,
-            y_stable=y_stable_scaled,
-            y_residual=y_residual_scaled,
-            y_hat=y_hat_scaled,
-            residual_target=residual_target_scaled,
-        )
+        if self.print_debug:
+            self._maybe_print_key_stats(
+                y=y_scaled,
+                y_stable=y_stable_scaled,
+                y_residual=y_residual_scaled,
+                y_hat=y_hat_scaled,
+                residual_target=residual_target_scaled,
+            )
 
         logs["loss/total"] = total.detach()
-
-        # Metrics are computed in denormalized space.
-        pred = self.inverse_transform(y_hat_scaled, batch=batch)
-        pred, target_denorm, metric_mask = self._align_pred_target(pred, raw_target, raw_mask)
         return {
             "loss": total,
             "logs": logs,
