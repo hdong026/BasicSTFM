@@ -26,8 +26,11 @@ class StandardScaler:
     eps: float = 1e-6
 
     def fit(self, array: np.ndarray) -> "StandardScaler":
-        self.mean = array.mean(axis=(0, 1), keepdims=True)
-        self.std = array.std(axis=(0, 1), keepdims=True)
+        finite = np.where(np.isfinite(array), array, np.nan)
+        self.mean = np.nanmean(finite, axis=(0, 1), keepdims=True)
+        self.std = np.nanstd(finite, axis=(0, 1), keepdims=True)
+        self.mean = np.where(np.isfinite(self.mean), self.mean, 0.0).astype(np.float32, copy=False)
+        self.std = np.where(np.isfinite(self.std), self.std, 1.0).astype(np.float32, copy=False)
         self.std = np.maximum(self.std, self.eps)
         return self
 
@@ -35,10 +38,14 @@ class StandardScaler:
         if self.mean is None or self.std is None:
             raise RuntimeError("StandardScaler must be fitted before transform")
         if _is_torch_tensor(array):
+            import torch
+
             mean = _to_torch_stat(self.mean, array)
             std = _to_torch_stat(self.std, array)
-            return (array - mean) / std
-        return (array - self.mean) / self.std
+            safe = torch.where(torch.isfinite(array), array, mean)
+            return (safe - mean) / std
+        safe = np.where(np.isfinite(array), array, self.mean)
+        return (safe - self.mean) / self.std
 
     def inverse_transform(self, array: Any) -> Any:
         if self.mean is None or self.std is None:

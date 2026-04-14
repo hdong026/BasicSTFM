@@ -187,6 +187,71 @@ class MultiDatasetDataModuleTest(unittest.TestCase):
                     torch.utils.data.distributed.DistributedSampler,
                 )
 
+    def test_single_dataset_collate_sanitizes_nonfinite_values(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            data = np.random.randn(32, 5, 1).astype(np.float32)
+            data[0, 0, 0] = np.nan
+            data[4, 1, 0] = np.inf
+            np.savez(root / "data.npz", data=data)
+            np.savez(root / "adj.npz", adj=np.eye(5, dtype=np.float32))
+
+            datamodule = WindowDataModule(
+                data_path=str(root / "data.npz"),
+                graph_path=str(root / "adj.npz"),
+                input_len=4,
+                output_len=2,
+                batch_size=1,
+                split=(0.75, 0.125, 0.125),
+                shuffle_train=False,
+            )
+            datamodule.setup()
+            batch = next(iter(datamodule.train_dataloader()))
+            self.assertTrue(torch.isfinite(batch["x"]).all())
+            self.assertTrue(torch.isfinite(batch["y"]).all())
+            self.assertFalse(batch["x_mask"].all())
+            self.assertFalse(batch["y_mask"].all())
+
+    def test_multi_dataset_collate_combines_channel_and_finite_masks(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            ds_a = root / "A"
+            ds_b = root / "B"
+            ds_a.mkdir()
+            ds_b.mkdir()
+
+            data_a = np.random.randn(48, 5, 1).astype(np.float32)
+            data_a[0, 0, 0] = np.nan
+            data_b = np.random.randn(48, 7, 2).astype(np.float32)
+            data_b[3, 2, 1] = np.inf
+            np.savez(ds_a / "data.npz", data=data_a)
+            np.savez(ds_a / "adj.npz", adj=np.eye(5, dtype=np.float32))
+            np.savez(ds_b / "data.npz", data=data_b)
+            np.savez(ds_b / "adj.npz", adj=np.eye(7, dtype=np.float32))
+
+            datamodule = MultiDatasetWindowDataModule(
+                datasets=[
+                    {"name": "A", "data_path": str(ds_a / "data.npz"), "graph_path": str(ds_a / "adj.npz")},
+                    {"name": "B", "data_path": str(ds_b / "data.npz"), "graph_path": str(ds_b / "adj.npz")},
+                ],
+                input_len=4,
+                output_len=2,
+                batch_size=1,
+                split=(0.6, 0.2, 0.2),
+                train_strategy="round_robin",
+                steps_per_epoch=2,
+                shuffle_train=False,
+            )
+            datamodule.setup()
+            batches = list(datamodule.train_dataloader())
+            self.assertEqual(len(batches), 2)
+            for batch in batches:
+                self.assertTrue(torch.isfinite(batch["x"]).all())
+                self.assertTrue(torch.isfinite(batch["y"]).all())
+                self.assertIn("x_mask", batch)
+                self.assertIn("y_mask", batch)
+            self.assertTrue(any((~batch["x_mask"]).any() or (~batch["y_mask"]).any() for batch in batches))
+
     def test_mismatched_graph_shape_fails_during_setup(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

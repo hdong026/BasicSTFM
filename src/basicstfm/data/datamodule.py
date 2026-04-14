@@ -52,6 +52,12 @@ def _load_numpy(
     return loaded
 
 
+def _sanitize_tensor(value: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    finite_mask = torch.isfinite(value)
+    sanitized = torch.nan_to_num(value, nan=0.0, posinf=0.0, neginf=0.0)
+    return sanitized, finite_mask
+
+
 class PartitionedWindowDataset(Dataset):
     """Forecasting windows over a node subset of a larger [T, N, C] array."""
 
@@ -416,8 +422,10 @@ class WindowDataModule:
 
     def _collate(self, samples: List[Dict[str, Any]]) -> Dict[str, Any]:
         batch = default_collate(samples)
-        batch["x_mask"] = torch.ones_like(batch["x"], dtype=torch.bool)
-        batch["y_mask"] = torch.ones_like(batch["y"], dtype=torch.bool)
+        batch["x"], x_mask = _sanitize_tensor(batch["x"])
+        batch["y"], y_mask = _sanitize_tensor(batch["y"])
+        batch["x_mask"] = x_mask
+        batch["y_mask"] = y_mask
         if self.graph is not None:
             batch["graph"] = self.graph
         return batch
@@ -728,8 +736,10 @@ class PartitionedWindowDataModule:
 
         def collate(samples: List[Dict[str, Any]]) -> Dict[str, Any]:
             batch = default_collate(samples)
-            batch["x_mask"] = torch.ones_like(batch["x"], dtype=torch.bool)
-            batch["y_mask"] = torch.ones_like(batch["y"], dtype=torch.bool)
+            batch["x"], x_mask = _sanitize_tensor(batch["x"])
+            batch["y"], y_mask = _sanitize_tensor(batch["y"])
+            batch["x_mask"] = x_mask
+            batch["y_mask"] = y_mask
             batch["dataset_name"] = name
             batch["dataset_index"] = torch.full(
                 (batch["x"].shape[0],),
@@ -1108,10 +1118,14 @@ class MultiDatasetWindowDataModule:
 
         def collate(samples: List[Dict[str, Any]]) -> Dict[str, Any]:
             batch = default_collate(samples)
+            batch["x"], x_finite = _sanitize_tensor(batch["x"])
+            batch["y"], y_finite = _sanitize_tensor(batch["y"])
             batch["x"] = self._pad_channels(batch["x"], self.max_num_channels)
             batch["y"] = self._pad_channels(batch["y"], self.max_num_channels)
-            batch["x_mask"] = self._channel_mask(batch["x"], num_channels)
-            batch["y_mask"] = self._channel_mask(batch["y"], num_channels)
+            x_finite = self._pad_channels(x_finite.to(dtype=batch["x"].dtype), self.max_num_channels).bool()
+            y_finite = self._pad_channels(y_finite.to(dtype=batch["y"].dtype), self.max_num_channels).bool()
+            batch["x_mask"] = self._channel_mask(batch["x"], num_channels).bool() & x_finite
+            batch["y_mask"] = self._channel_mask(batch["y"], num_channels).bool() & y_finite
             batch["dataset_name"] = name
             batch["dataset_index"] = torch.full(
                 (batch["x"].shape[0],),
