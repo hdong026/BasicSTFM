@@ -139,16 +139,29 @@ def infer_stage_regime(row: Mapping[str, Any]) -> str:
 
 
 def pretty_model_name(row: Mapping[str, Any]) -> str:
+    experiment_name = str(row.get("experiment_name") or "").lower()
+    experiment_mapping = {
+        "srd_stfm_foundation_transfer": "DPM-STFM",
+        "srd_stfm_joint_from_scratch": "DPM-Scratch",
+        "srd_stfm_ablation_stable_only": "DPM-StableOnly",
+        "srd_stfm_ablation_no_diffusion": "DPM-NoDiffusion",
+        "srd_stfm_ablation_no_disentangle": "DPM-NoDisentangle",
+    }
+    if experiment_name in experiment_mapping:
+        return experiment_mapping[experiment_name]
+
     model_type = str(row.get("model_type") or "")
     mapping = {
         "OpenCityFoundationModel": "OpenCity",
         "FactoSTFoundationModel": "FactoST",
         "UniSTFoundationModel": "UniST",
+        "SRDSTFMBackbone": "DPM-STFM",
+        "DPMSTFMBackbone": "DPM-STFM",
+        "MADSTFMBackbone": "DPM-STFM",
     }
     if model_type in mapping:
         return mapping[model_type]
 
-    experiment_name = str(row.get("experiment_name") or "").lower()
     if "opencity" in experiment_name:
         return "OpenCity"
     if "factost" in experiment_name:

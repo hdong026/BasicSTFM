@@ -57,6 +57,12 @@ def build_parser() -> argparse.ArgumentParser:
         default="Traffic Transfer Benchmark (12->12)",
         help="Figure title.",
     )
+    parser.add_argument(
+        "--model-order",
+        nargs="*",
+        default=[],
+        help="Optional ordered model names for the table/figure.",
+    )
     return parser
 
 
@@ -66,12 +72,22 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     rows = _load_rows(args.input_roots)
     dataset_order = args.datasets or None
+    default_model_order = (
+        "OpenCity",
+        "FactoST",
+        "UniST",
+        "DPM-STFM",
+        "DPM-Scratch",
+        "DPM-StableOnly",
+        "DPM-NoDiffusion",
+        "DPM-NoDisentangle",
+    )
     datasets, summary = build_paper_summary(
         rows,
         split=args.split,
         metric=args.metric,
         datasets=dataset_order,
-        model_order=("OpenCity", "FactoST", "UniST"),
+        model_order=tuple(args.model_order) if args.model_order else default_model_order,
     )
     if not summary:
         raise SystemExit("No transfer stages found for visualization.")
@@ -193,8 +209,23 @@ def make_figure(
         "OpenCity": "#4C78A8",
         "FactoST": "#E45756",
         "UniST": "#54A24B",
+        "DPM-STFM": "#B279A2",
+        "DPM-Scratch": "#9D755D",
+        "DPM-StableOnly": "#72B7B2",
+        "DPM-NoDiffusion": "#F58518",
+        "DPM-NoDisentangle": "#FF9DA6",
     }
-    colors = [palette.get(name, "#4C78A8") for name in model_names]
+    fallback_cycle = [
+        "#4C78A8",
+        "#E45756",
+        "#54A24B",
+        "#B279A2",
+        "#F58518",
+        "#72B7B2",
+        "#FF9DA6",
+        "#9D755D",
+    ]
+    colors = [palette.get(name, fallback_cycle[index % len(fallback_cycle)]) for index, name in enumerate(model_names)]
 
     zero = {name: [row.get(f"{dataset} ZS") for dataset in datasets] for name, row in zip(model_names, summary)}
     few = {name: [row.get(f"{dataset} FS") for dataset in datasets] for name, row in zip(model_names, summary)}
@@ -280,7 +311,7 @@ def _plot_grouped_bars(
     import numpy as np
 
     x = np.arange(len(datasets), dtype=float)
-    width = 0.22
+    width = min(0.8 / max(len(model_names), 1), 0.22)
     offsets = np.linspace(-(len(model_names) - 1) / 2, (len(model_names) - 1) / 2, len(model_names)) * width
 
     for index, name in enumerate(model_names):
