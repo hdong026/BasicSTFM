@@ -99,6 +99,43 @@ class StageTaskProtocolTest(unittest.TestCase):
         self.assertIn("reconstruction/loss/spectral", out["logs"])
         self.assertIn("forecast/loss/spectral", out["logs"])
 
+    def test_stable_residual_task_supports_trend_target(self):
+        import_builtin_components()
+        model = MODELS.build(
+            {
+                "type": "SRDSTFMBackbone",
+                "num_nodes": 4,
+                "input_dim": 1,
+                "output_dim": 1,
+                "input_len": 8,
+                "output_len": 4,
+                "hidden_dim": 16,
+                "stable_summary_mode": "attention",
+                "stable_frequency_low_ratio": 0.4,
+                "use_calibration_head": False,
+            }
+        )
+        task = TASKS.build(
+            {
+                "type": "StableResidualForecastingTask",
+                "phase": "joint",
+                "stable_target": "trend",
+                "trend_scale": 2,
+                "stable_low_ratio": 0.4,
+                "stable_num_low_bins": 2,
+            }
+        )
+        losses = LossCollection([{"type": "mae"}]).to(torch.device("cpu"))
+        batch = {
+            "x": torch.randn(2, 8, 4, 1),
+            "y": torch.randn(2, 4, 4, 1),
+            "graph": torch.eye(4),
+        }
+        out = task.step(model, batch, losses, torch.device("cpu"))
+        self.assertIn("loss/total", out["logs"])
+        self.assertEqual(tuple(out["pred"].shape), (2, 4, 4, 1))
+        self.assertEqual(tuple(out["target"].shape), (2, 4, 4, 1))
+
 
 if __name__ == "__main__":
     unittest.main()

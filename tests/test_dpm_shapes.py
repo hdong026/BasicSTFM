@@ -86,6 +86,29 @@ class SRDSTFMShapeTest(unittest.TestCase):
         out = model(x, mode="encode")
         self.assertEqual(tuple(out["embedding"].shape), (2, 6, 4, 8))
 
+    def test_summarizer_mode_and_disabled_calibration_still_run(self):
+        import_builtin_components()
+        model = MODELS.build(
+            {
+                "type": "SRDSTFMBackbone",
+                "num_nodes": 4,
+                "input_dim": 1,
+                "output_dim": 1,
+                "input_len": 6,
+                "output_len": 2,
+                "hidden_dim": 8,
+                "stable_summary_mode": "summarizer",
+                "stable_frequency_num_low_bins": 2,
+                "use_calibration_head": False,
+            }
+        )
+        x = torch.randn(2, 6, 4, 1)
+        target = torch.randn(2, 2, 4, 1)
+        out = model(x, graph=torch.eye(4), target=target, mode="forecast")
+        self.assertEqual(tuple(out["forecast"].shape), (2, 2, 4, 1))
+        self.assertEqual(tuple(out["stable_summary"].shape), (2, 4, 8))
+        self.assertEqual(tuple(out["stable_temporal_weight"].shape), (2, 6, 4, 1))
+
 
 if __name__ == "__main__":
     unittest.main()
