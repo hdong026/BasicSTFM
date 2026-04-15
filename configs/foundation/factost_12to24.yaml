@@ -1,0 +1,257 @@
+experiment_name: factost_traffic_benchmark_12to24
+seed: 42
+
+trainer:
+  type: MultiStageTrainer
+  device: auto
+  work_dir: runs/factost_traffic_benchmark_12to24
+  log_every: 50
+
+dataset_registry:
+  METR-LA:
+    name: METR-LA
+    data_path: data/METR-LA/data.npz
+    graph_path: data/METR-LA/adj.npz
+    batch_size: 12
+  PEMS-BAY:
+    name: PEMS-BAY
+    data_path: data/PEMS-BAY/data.npz
+    graph_path: data/PEMS-BAY/adj.npz
+    batch_size: 6
+  PEMS04:
+    name: PEMS04
+    data_path: data/PEMS04/data.npz
+    graph_path: data/PEMS04/adj.npz
+    batch_size: 8
+  PEMS07:
+    name: PEMS07
+    data_path: data/PEMS07/data.npz
+    graph_path: data/PEMS07/adj.npz
+    batch_size: 6
+  PEMS08:
+    name: PEMS08
+    data_path: data/PEMS08/data.npz
+    graph_path: data/PEMS08/adj.npz
+    batch_size: 8
+
+dataset_groups:
+  benchmark_sources:
+    - PEMS-BAY
+    - PEMS04
+    - PEMS07
+  held_out_targets:
+    - METR-LA
+    - PEMS08
+
+data:
+  type: WindowDataModule
+  dataset_key: METR-LA
+  input_len: 12
+  output_len: 24
+  batch_size: 16
+  split: [0.7, 0.1, 0.2]
+  scaler:
+    type: standard
+
+model:
+  type: FactoSTFoundationModel
+  num_nodes: auto
+  input_dim: auto
+  output_dim: auto
+  input_len: auto
+  output_len: auto
+  patch_len: 12
+  hidden_dim: 128
+  num_layers: 3
+  num_heads: 8
+  ffn_dim: 256
+  num_prompt_tokens: 3
+  use_st_adapter: true
+
+pipeline:
+  stages:
+    - name: universal_temporal_pretrain
+      save_artifact: factost_multisource_utp
+      reset_data: true
+      data:
+        type: MultiDatasetWindowDataModule
+        dataset_group: benchmark_sources
+        input_len: 12
+        output_len: 24
+        batch_size: 8
+        train_strategy: round_robin
+        eval_strategy: per_dataset
+        split: [0.7, 0.1, 0.2]
+        scaler:
+          type: standard
+      epochs: 5
+      model:
+        use_st_adapter: false
+      task:
+        type: JointReconstructionForecastTask
+        mask_ratio: 0.5
+        mask_strategy: random
+        reconstruction_weight: 1.0
+        forecast_weight: 1.0
+        reconstruction_spectral_weight: 0.1
+        forecast_spectral_weight: 0.1
+        spectral_scales: [1, 2, 4]
+      losses:
+        - type: mse
+      metrics:
+        - type: mae
+      optimizer:
+        type: AdamW
+        lr: 0.001
+        weight_decay: 0.0001
+      scheduler:
+        type: CosineAnnealingLR
+        T_max: 5
+      validate_every: 1
+      gradient_clip_val: 5.0
+
+    - name: metr_la_zero_shot
+      eval_only: true
+      epochs: 0
+      reset_data: true
+      data:
+        type: WindowDataModule
+        dataset_key: METR-LA
+        input_len: 12
+        output_len: 24
+        batch_size: 16
+        split: [0.7, 0.1, 0.2]
+        scaler:
+          type: standard
+      load_from: factost_multisource_utp
+      strict_load: true
+      model:
+        use_st_adapter: false
+        output_dim: 1
+      task:
+        type: ForecastingTask
+        model_mode: zero_shot
+      losses:
+        - type: mae
+      metrics:
+        - type: mae
+        - type: rmse
+
+    - name: metr_la_five_percent_factorized_adapter
+      epochs: 3
+      reset_data: true
+      data:
+        type: WindowDataModule
+        dataset_key: METR-LA
+        input_len: 12
+        output_len: 24
+        batch_size: 16
+        split: [0.7, 0.1, 0.2]
+        scaler:
+          type: standard
+      load_from: factost_multisource_utp
+      load_method: load_backbone_weights
+      strict_load: false
+      model:
+        use_st_adapter: true
+        output_dim: 1
+      few_shot_ratio: 0.05
+      freeze:
+        - all
+      unfreeze:
+        - prompt_*
+        - st_*
+        - metadata_gate.*
+        - forecast_head.*
+      task:
+        type: ForecastingTask
+      losses:
+        - type: mae
+          weight: 1.0
+        - type: mse
+          weight: 0.05
+      metrics:
+        - type: mae
+        - type: rmse
+      optimizer:
+        type: AdamW
+        lr: 0.0005
+        weight_decay: 0.0001
+      scheduler:
+        type: CosineAnnealingLR
+        T_max: 3
+      validate_every: 1
+      gradient_clip_val: 5.0
+
+    - name: pems08_zero_shot
+      eval_only: true
+      epochs: 0
+      reset_data: true
+      data:
+        type: WindowDataModule
+        dataset_key: PEMS08
+        input_len: 12
+        output_len: 24
+        batch_size: 16
+        split: [0.7, 0.1, 0.2]
+        scaler:
+          type: standard
+      load_from: factost_multisource_utp
+      strict_load: true
+      model:
+        use_st_adapter: false
+        output_dim: 1
+      task:
+        type: ForecastingTask
+        model_mode: zero_shot
+      losses:
+        - type: mae
+      metrics:
+        - type: mae
+        - type: rmse
+
+    - name: pems08_five_percent_factorized_adapter
+      epochs: 3
+      reset_data: true
+      data:
+        type: WindowDataModule
+        dataset_key: PEMS08
+        input_len: 12
+        output_len: 24
+        batch_size: 16
+        split: [0.7, 0.1, 0.2]
+        scaler:
+          type: standard
+      load_from: factost_multisource_utp
+      load_method: load_backbone_weights
+      strict_load: false
+      model:
+        use_st_adapter: true
+        output_dim: 1
+      few_shot_ratio: 0.05
+      freeze:
+        - all
+      unfreeze:
+        - prompt_*
+        - st_*
+        - metadata_gate.*
+        - forecast_head.*
+      task:
+        type: ForecastingTask
+      losses:
+        - type: mae
+          weight: 1.0
+        - type: mse
+          weight: 0.05
+      metrics:
+        - type: mae
+        - type: rmse
+      optimizer:
+        type: AdamW
+        lr: 0.0005
+        weight_decay: 0.0001
+      scheduler:
+        type: CosineAnnealingLR
+        T_max: 3
+      validate_every: 1
+      gradient_clip_val: 5.0
