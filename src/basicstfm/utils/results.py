@@ -143,6 +143,8 @@ def pretty_model_name(row: Mapping[str, Any]) -> str:
     experiment_mapping = {
         "opencity_traffic_benchmark": "OpenCity",
         "opencity_largest_transfer": "OpenCity-LargeST",
+        "opencity_traffic_benchmark_single_target": "OpenCity-1Ch",
+        "opencity_largest_transfer_single_target": "OpenCity-LargeST-1Ch",
         "srd_stfm_foundation_transfer": "DPM-STFM",
         "srd_stfm_joint_from_scratch": "DPM-Scratch",
         "srd_stfm_ablation_stable_only": "DPM-StableOnly",
