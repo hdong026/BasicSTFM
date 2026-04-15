@@ -141,6 +141,8 @@ def infer_stage_regime(row: Mapping[str, Any]) -> str:
 def pretty_model_name(row: Mapping[str, Any]) -> str:
     experiment_name = str(row.get("experiment_name") or "").lower()
     experiment_mapping = {
+        "opencity_traffic_benchmark": "OpenCity",
+        "opencity_largest_transfer": "OpenCity-LargeST",
         "srd_stfm_foundation_transfer": "DPM-STFM",
         "srd_stfm_joint_from_scratch": "DPM-Scratch",
         "srd_stfm_ablation_stable_only": "DPM-StableOnly",
