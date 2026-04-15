@@ -17,6 +17,27 @@ from basicstfm.utils.checkpoint import save_checkpoint
 
 
 class FoundationModelShapeTest(unittest.TestCase):
+    def test_opencity_supports_multichannel_input_with_single_target_output(self):
+        import_builtin_components()
+        model = MODELS.build(
+            {
+                "type": "OpenCityFoundationModel",
+                "num_nodes": 5,
+                "input_dim": 3,
+                "output_dim": 1,
+                "input_len": 8,
+                "output_len": 3,
+                "hidden_dim": 16,
+                "num_layers": 1,
+                "num_heads": 2,
+                "ffn_dim": 32,
+            }
+        )
+        x = torch.randn(2, 8, 5, 3)
+        graph = torch.eye(5)
+        out = model(x, graph=graph, mode="forecast")
+        self.assertEqual(tuple(out["forecast"].shape), (2, 3, 5, 1))
+
     def test_forecast_reconstruct_and_encode_shapes(self):
         import_builtin_components()
         cases = [
