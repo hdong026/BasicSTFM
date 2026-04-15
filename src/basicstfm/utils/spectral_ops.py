@@ -38,16 +38,23 @@ def temporal_amplitude(
 def split_low_high_frequency(
     value: torch.Tensor,
     low_ratio: float = 0.25,
+    num_low_bins: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Split temporal spectrum into low/high components."""
 
     value = ensure_4d(value)
-    if not 0.0 < float(low_ratio) < 1.0:
-        raise ValueError("low_ratio must be in (0, 1)")
-
     fft = torch.fft.rfft(value, dim=1)
     freq_bins = fft.shape[1]
-    low_bins = max(1, int(round(freq_bins * float(low_ratio))))
+    if num_low_bins is not None:
+        low_bins = int(num_low_bins)
+        if low_bins <= 0:
+            raise ValueError("num_low_bins must be a positive integer")
+    else:
+        if not 0.0 < float(low_ratio) < 1.0:
+            raise ValueError("low_ratio must be in (0, 1)")
+        low_bins = int(round(freq_bins * float(low_ratio)))
+
+    low_bins = max(1, min(freq_bins, low_bins))
 
     low_fft = torch.zeros_like(fft)
     low_fft[:, :low_bins] = fft[:, :low_bins]
@@ -76,6 +83,30 @@ def downsample_time(value: torch.Tensor, scale: int) -> torch.Tensor:
     reduced_steps = value.shape[-1]
     value = value.reshape(batch, nodes, channels, reduced_steps).permute(0, 3, 1, 2).contiguous()
     return value
+
+
+def extract_temporal_trend(
+    value: torch.Tensor,
+    *,
+    scale: int = 4,
+) -> torch.Tensor:
+    """Build a coarse temporal trend via average-pool then interpolation."""
+
+    value = ensure_4d(value)
+    if scale <= 1:
+        return value
+
+    batch, steps, nodes, channels = value.shape
+    grid = value.permute(0, 2, 3, 1).reshape(batch * nodes, channels, steps)
+    pooled = F.avg_pool1d(grid, kernel_size=scale, stride=scale, ceil_mode=True)
+    trend = F.interpolate(
+        pooled,
+        size=steps,
+        mode="linear",
+        align_corners=False,
+    )
+    trend = trend.reshape(batch, nodes, channels, steps).permute(0, 3, 1, 2).contiguous()
+    return trend
 
 
 def multi_scale_spectral_distance(

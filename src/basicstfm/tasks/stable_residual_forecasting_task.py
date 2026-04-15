@@ -10,7 +10,11 @@ from basicstfm.losses.disentangle_losses import cross_covariance_penalty
 from basicstfm.losses.stable_losses import stable_forecast_loss
 from basicstfm.registry import TASKS
 from basicstfm.tasks.base import Task, move_to_device
-from basicstfm.utils.spectral_ops import multi_scale_spectral_distance, split_low_high_frequency
+from basicstfm.utils.spectral_ops import (
+    extract_temporal_trend,
+    multi_scale_spectral_distance,
+    split_low_high_frequency,
+)
 
 
 @TASKS.register("StableResidualForecastingTask")
@@ -26,6 +30,9 @@ class StableResidualForecastingTask(Task):
         phase: str = "joint",
         mask_key: Optional[str] = None,
         stable_target: str = "lowfreq",
+        stable_low_ratio: float = 0.3,
+        stable_num_low_bins: Optional[int] = None,
+        trend_scale: int = 4,
         final_weight: float = 1.0,
         stable_weight: float = 0.2,
         residual_weight: float = 0.2,
@@ -45,9 +52,14 @@ class StableResidualForecastingTask(Task):
         self.phase = str(phase)
         self.mask_key = mask_key
 
-        if stable_target not in {"lowfreq", "target"}:
-            raise ValueError("stable_target must be one of: lowfreq, target")
+        if stable_target not in {"lowfreq", "trend", "target"}:
+            raise ValueError("stable_target must be one of: lowfreq, trend, target")
         self.stable_target = stable_target
+        self.stable_low_ratio = float(stable_low_ratio)
+        self.stable_num_low_bins = (
+            None if stable_num_low_bins is None else int(stable_num_low_bins)
+        )
+        self.trend_scale = int(trend_scale)
 
         self.final_weight = float(final_weight)
         self.stable_weight = float(stable_weight)
@@ -170,7 +182,13 @@ class StableResidualForecastingTask(Task):
         y_residual_scaled, _, _ = self._align_pred_target(y_residual_scaled, y_scaled, loss_mask)
 
         if self.stable_target == "lowfreq":
-            stable_target_scaled, _ = split_low_high_frequency(y_scaled, low_ratio=0.3)
+            stable_target_scaled, _ = split_low_high_frequency(
+                y_scaled,
+                low_ratio=self.stable_low_ratio,
+                num_low_bins=self.stable_num_low_bins,
+            )
+        elif self.stable_target == "trend":
+            stable_target_scaled = extract_temporal_trend(y_scaled, scale=self.trend_scale)
         else:
             stable_target_scaled = y_scaled
 

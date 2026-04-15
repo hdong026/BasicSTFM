@@ -35,10 +35,17 @@ class SRDSTFMBackbone(nn.Module):
         residual_mode: str = "forecast",
         fusion_mode: str = "additive",
         use_frequency_branch: bool = True,
+        stable_summary_mode: str = "attention",
+        stable_mixer_layers: int = 2,
+        stable_mixer_kernel_size: int = 3,
+        stable_coarse_scale: int = 4,
+        stable_frequency_low_ratio: float = 0.3,
+        stable_frequency_num_low_bins: Optional[int] = None,
         num_datasets: int = 1,
         diffusion_enabled: bool = True,
         use_inertia_gate: bool = True,
         use_attenuation_gate: bool = True,
+        use_calibration_head: bool = True,
         detach_stable_for_residual: bool = True,
         pretrained_path: Optional[str] = None,
         strict_load: bool = False,
@@ -53,13 +60,20 @@ class SRDSTFMBackbone(nn.Module):
         self.residual_mode = str(residual_mode)
         self.fusion_mode = str(fusion_mode)
         self.diffusion_enabled = bool(diffusion_enabled)
+        self.use_calibration_head = bool(use_calibration_head)
 
         self.stable_trunk = StableTrunkEncoder(
             input_dim=self.input_dim,
             hidden_dim=self.hidden_dim,
             output_len=self.output_len,
             output_dim=self.output_dim,
+            coarse_scale=int(stable_coarse_scale),
             use_frequency_branch=bool(use_frequency_branch),
+            summary_mode=str(stable_summary_mode),
+            stable_mixer_layers=int(stable_mixer_layers),
+            stable_mixer_kernel_size=int(stable_mixer_kernel_size),
+            frequency_low_ratio=float(stable_frequency_low_ratio),
+            frequency_num_low_bins=stable_frequency_num_low_bins,
         )
         self.residual_constructor = ResidualConstructor(
             mode=self.residual_mode,
@@ -80,8 +94,11 @@ class SRDSTFMBackbone(nn.Module):
             output_dim=self.output_dim,
             fusion_mode=self.fusion_mode,
         )
-        self.calibration_head = nn.Linear(self.output_dim, self.output_dim)
-        self._init_calibration_identity()
+        if self.use_calibration_head:
+            self.calibration_head = nn.Linear(self.output_dim, self.output_dim)
+            self._init_calibration_identity()
+        else:
+            self.calibration_head = nn.Identity()
 
         if pretrained_path:
             load_weights(self, pretrained_path, strict=strict_load)
@@ -239,6 +256,8 @@ class SRDSTFMBackbone(nn.Module):
             "stable_forecast": stable_forecast,
             "stable_reconstruction": stable_reconstruction,
             "stable_latent": stable["stable_latent"],
+            "stable_summary": stable["stable_summary"],
+            "stable_temporal_weight": stable["stable_temporal_weight"],
             "stable_component": stable_forecast,
             "stable_local_branch": stable["stable_local_branch"],
             "stable_coarse_branch": stable["stable_coarse_branch"],
