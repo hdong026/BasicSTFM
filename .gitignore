@@ -1,0 +1,60 @@
+# Byte-compiled / caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.mypy_cache/
+.ruff_cache/
+.pytype/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Packaging / editable installs
+build/
+dist/
+*.egg-info/
+*.egg
+pip-wheel-metadata/
+
+# Experiment outputs (checkpoints live under runs/)
+runs/
+logs/
+*.log
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# ML tooling (optional local)
+wandb/
+mlruns/
+
+# Large / downloaded datasets (adjust if you commit small fixtures under data/)
+data/
+
+# Torch / distributed
+*.elastic
+
+# benchmark
+benchmark/

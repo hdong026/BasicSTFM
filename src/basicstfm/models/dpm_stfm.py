@@ -135,7 +135,7 @@ class SRDSTFMBackbone(nn.Module):
             return None
         target = ensure_4d(target)
         if target.shape[-1] > self.output_dim:
-            raise ValueError(f"Expected target channels <= {self.output_dim}, got {target.shape[-1]}")
+            target = target[..., : self.output_dim]
         if target.shape[-1] < self.output_dim:
             target = F.pad(target, (0, self.output_dim - target.shape[-1]))
         return target

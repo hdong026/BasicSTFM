@@ -1,0 +1,450 @@
+experiment_name: unist_largest_transfer_single_target
+seed: 42
+
+trainer:
+  type: MultiStageTrainer
+  device: auto
+  work_dir: runs/unist_largest_transfer_single_target
+  log_every: 50
+
+dataset_registry:
+  METR-LA:
+    name: METR-LA
+    data_path: data/METR-LA/data.npz
+    graph_path: data/METR-LA/adj.npz
+    batch_size: 16
+  PEMS-BAY:
+    name: PEMS-BAY
+    data_path: data/PEMS-BAY/data.npz
+    graph_path: data/PEMS-BAY/adj.npz
+    batch_size: 16
+  PEMS04:
+    name: PEMS04
+    data_path: data/PEMS04/data.npz
+    graph_path: data/PEMS04/adj.npz
+    batch_size: 16
+  PEMS07:
+    name: PEMS07
+    data_path: data/PEMS07/data.npz
+    graph_path: data/PEMS07/adj.npz
+    batch_size: 16
+  PEMS08:
+    name: PEMS08
+    data_path: data/PEMS08/data.npz
+    graph_path: data/PEMS08/adj.npz
+    batch_size: 16
+
+data:
+  type: WindowDataModule
+  dataset_key: METR-LA
+  input_len: 12
+  output_len: 12
+  batch_size: 16
+  split: [0.7, 0.1, 0.2]
+  scaler:
+    type: standard
+
+model:
+  type: UniSTFoundationModel
+  num_nodes: 1024
+  input_dim: 3
+  output_dim: 1
+  input_len: 12
+  output_len: 12
+  hidden_dim: 128
+  encoder_layers: 6
+  decoder_layers: 4
+  num_heads: 8
+  ffn_dim: 256
+  use_prompt: true
+  num_memory_spatial: 128
+  num_memory_temporal: 128
+
+pipeline:
+  stages:
+    - name: largest_graph_masked_pretrain
+      save_artifact: unist_largest_pretrain
+      reset_data: true
+      data:
+        type: PartitionedWindowDataModule
+        name: LargeST
+        data_path: data/LargeST_full/data.npy
+        graph_path: data/LargeST_full/adj.npy
+        input_len: 12
+        output_len: 12
+        batch_size: 4
+        split: [0.7, 0.1, 0.2]
+        scaler:
+          type: standard
+        mmap_mode: r
+        partition_size: 1024
+        partition_strategy: graph_greedy
+        scaler_fit_timesteps: 50000
+        steps_per_epoch: 2048
+        train_strategy: round_robin
+      epochs: 5
+      model:
+        use_prompt: false
+      task:
+        type: MaskedReconstructionTask
+        mask_ratio: 0.5
+        mask_strategy: mixed
+        mask_strategies: [random, temporal, tube, block]
+      losses:
+        - type: mse
+      metrics:
+        - type: mae
+      optimizer:
+        type: AdamW
+        lr: 0.001
+        weight_decay: 0.0001
+      scheduler:
+        type: CosineAnnealingLR
+        T_max: 5
+      validate_every: 5
+      gradient_clip_val: 5.0
+
+    - name: metr_la_zero_shot
+      eval_only: true
+      epochs: 0
+      reset_data: true
+      data:
+        type: WindowDataModule
+        dataset_key: METR-LA
+        input_len: 12
+        output_len: 12
+        batch_size: 16
+        split: [0.7, 0.1, 0.2]
+        scaler:
+          type: standard
+      load_from: unist_largest_pretrain
+      load_method: load_backbone_weights
+      strict_load: false
+      model:
+        use_prompt: true
+      task:
+        type: MaskedForecastCompletionTask
+      losses:
+        - type: mae
+      metrics:
+        - type: mae
+        - type: rmse
+
+    - name: metr_la_five_percent_prompt_tuning
+      epochs: 3
+      reset_data: true
+      data:
+        type: WindowDataModule
+        dataset_key: METR-LA
+        input_len: 12
+        output_len: 12
+        batch_size: 16
+        split: [0.7, 0.1, 0.2]
+        scaler:
+          type: standard
+      load_from: unist_largest_pretrain
+      load_method: load_backbone_weights
+      strict_load: false
+      model:
+        use_prompt: true
+      few_shot_ratio: 0.05
+      freeze:
+        - all
+      unfreeze:
+        - prompt.*
+        - reconstruction_head.*
+      task:
+        type: MaskedForecastCompletionTask
+      losses:
+        - type: mae
+          weight: 1.0
+        - type: mse
+          weight: 0.05
+      metrics:
+        - type: mae
+        - type: rmse
+      optimizer:
+        type: AdamW
+        lr: 0.0005
+        weight_decay: 0.0001
+      scheduler:
+        type: CosineAnnealingLR
+        T_max: 3
+      validate_every: 1
+      gradient_clip_val: 5.0
+
+    - name: pems_bay_zero_shot
+      eval_only: true
+      epochs: 0
+      reset_data: true
+      data:
+        type: WindowDataModule
+        dataset_key: PEMS-BAY
+        input_len: 12
+        output_len: 12
+        batch_size: 16
+        split: [0.7, 0.1, 0.2]
+        scaler:
+          type: standard
+      load_from: unist_largest_pretrain
+      load_method: load_backbone_weights
+      strict_load: false
+      model:
+        use_prompt: true
+      task:
+        type: MaskedForecastCompletionTask
+      losses:
+        - type: mae
+      metrics:
+        - type: mae
+        - type: rmse
+
+    - name: pems_bay_five_percent_prompt_tuning
+      epochs: 3
+      reset_data: true
+      data:
+        type: WindowDataModule
+        dataset_key: PEMS-BAY
+        input_len: 12
+        output_len: 12
+        batch_size: 16
+        split: [0.7, 0.1, 0.2]
+        scaler:
+          type: standard
+      load_from: unist_largest_pretrain
+      load_method: load_backbone_weights
+      strict_load: false
+      model:
+        use_prompt: true
+      few_shot_ratio: 0.05
+      freeze:
+        - all
+      unfreeze:
+        - prompt.*
+        - reconstruction_head.*
+      task:
+        type: MaskedForecastCompletionTask
+      losses:
+        - type: mae
+          weight: 1.0
+        - type: mse
+          weight: 0.05
+      metrics:
+        - type: mae
+        - type: rmse
+      optimizer:
+        type: AdamW
+        lr: 0.0005
+        weight_decay: 0.0001
+      scheduler:
+        type: CosineAnnealingLR
+        T_max: 3
+      validate_every: 1
+      gradient_clip_val: 5.0
+
+    - name: pems04_zero_shot
+      eval_only: true
+      epochs: 0
+      reset_data: true
+      data:
+        type: WindowDataModule
+        dataset_key: PEMS04
+        input_len: 12
+        output_len: 12
+        batch_size: 16
+        split: [0.7, 0.1, 0.2]
+        scaler:
+          type: standard
+      load_from: unist_largest_pretrain
+      load_method: load_backbone_weights
+      strict_load: false
+      model:
+        use_prompt: true
+      task:
+        type: MaskedForecastCompletionTask
+      losses:
+        - type: mae
+      metrics:
+        - type: mae
+        - type: rmse
+
+    - name: pems04_five_percent_prompt_tuning
+      epochs: 3
+      reset_data: true
+      data:
+        type: WindowDataModule
+        dataset_key: PEMS04
+        input_len: 12
+        output_len: 12
+        batch_size: 16
+        split: [0.7, 0.1, 0.2]
+        scaler:
+          type: standard
+      load_from: unist_largest_pretrain
+      load_method: load_backbone_weights
+      strict_load: false
+      model:
+        use_prompt: true
+      few_shot_ratio: 0.05
+      freeze:
+        - all
+      unfreeze:
+        - prompt.*
+        - reconstruction_head.*
+      task:
+        type: MaskedForecastCompletionTask
+      losses:
+        - type: mae
+          weight: 1.0
+        - type: mse
+          weight: 0.05
+      metrics:
+        - type: mae
+        - type: rmse
+      optimizer:
+        type: AdamW
+        lr: 0.0005
+        weight_decay: 0.0001
+      scheduler:
+        type: CosineAnnealingLR
+        T_max: 3
+      validate_every: 1
+      gradient_clip_val: 5.0
+
+    - name: pems07_zero_shot
+      eval_only: true
+      epochs: 0
+      reset_data: true
+      data:
+        type: WindowDataModule
+        dataset_key: PEMS07
+        input_len: 12
+        output_len: 12
+        batch_size: 16
+        split: [0.7, 0.1, 0.2]
+        scaler:
+          type: standard
+      load_from: unist_largest_pretrain
+      load_method: load_backbone_weights
+      strict_load: false
+      model:
+        use_prompt: true
+      task:
+        type: MaskedForecastCompletionTask
+      losses:
+        - type: mae
+      metrics:
+        - type: mae
+        - type: rmse
+
+    - name: pems07_five_percent_prompt_tuning
+      epochs: 3
+      reset_data: true
+      data:
+        type: WindowDataModule
+        dataset_key: PEMS07
+        input_len: 12
+        output_len: 12
+        batch_size: 16
+        split: [0.7, 0.1, 0.2]
+        scaler:
+          type: standard
+      load_from: unist_largest_pretrain
+      load_method: load_backbone_weights
+      strict_load: false
+      model:
+        use_prompt: true
+      few_shot_ratio: 0.05
+      freeze:
+        - all
+      unfreeze:
+        - prompt.*
+        - reconstruction_head.*
+      task:
+        type: MaskedForecastCompletionTask
+      losses:
+        - type: mae
+          weight: 1.0
+        - type: mse
+          weight: 0.05
+      metrics:
+        - type: mae
+        - type: rmse
+      optimizer:
+        type: AdamW
+        lr: 0.0005
+        weight_decay: 0.0001
+      scheduler:
+        type: CosineAnnealingLR
+        T_max: 3
+      validate_every: 1
+      gradient_clip_val: 5.0
+
+    - name: pems08_zero_shot
+      eval_only: true
+      epochs: 0
+      reset_data: true
+      data:
+        type: WindowDataModule
+        dataset_key: PEMS08
+        input_len: 12
+        output_len: 12
+        batch_size: 16
+        split: [0.7, 0.1, 0.2]
+        scaler:
+          type: standard
+      load_from: unist_largest_pretrain
+      load_method: load_backbone_weights
+      strict_load: false
+      model:
+        use_prompt: true
+      task:
+        type: MaskedForecastCompletionTask
+      losses:
+        - type: mae
+      metrics:
+        - type: mae
+        - type: rmse
+
+    - name: pems08_five_percent_prompt_tuning
+      epochs: 3
+      reset_data: true
+      data:
+        type: WindowDataModule
+        dataset_key: PEMS08
+        input_len: 12
+        output_len: 12
+        batch_size: 16
+        split: [0.7, 0.1, 0.2]
+        scaler:
+          type: standard
+      load_from: unist_largest_pretrain
+      load_method: load_backbone_weights
+      strict_load: false
+      model:
+        use_prompt: true
+      few_shot_ratio: 0.05
+      freeze:
+        - all
+      unfreeze:
+        - prompt.*
+        - reconstruction_head.*
+      task:
+        type: MaskedForecastCompletionTask
+      losses:
+        - type: mae
+          weight: 1.0
+        - type: mse
+          weight: 0.05
+      metrics:
+        - type: mae
+        - type: rmse
+      optimizer:
+        type: AdamW
+        lr: 0.0005
+        weight_decay: 0.0001
+      scheduler:
+        type: CosineAnnealingLR
+        T_max: 3
+      validate_every: 1
+      gradient_clip_val: 5.0

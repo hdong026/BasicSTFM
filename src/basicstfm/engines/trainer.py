@@ -691,6 +691,14 @@ class MultiStageTrainer:
             resolved = checkpoint_dir / f"{reference}{suffix}"
             if resolved.exists():
                 return str(resolved)
+        # Resume skips early stages, so ``self.artifacts[save_artifact]`` may be empty.
+        # Checkpoints are named after ``stage.name``, while YAML often uses ``save_artifact``.
+        for stage in self.plan.stages:
+            if stage.save_artifact == reference:
+                for suffix in ("_last.pt", "_best.pt"):
+                    resolved = checkpoint_dir / f"{stage.name}{suffix}"
+                    if resolved.exists():
+                        return str(resolved)
         return reference
 
     def _resolve_model_config(
