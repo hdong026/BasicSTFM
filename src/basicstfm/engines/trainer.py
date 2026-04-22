@@ -42,6 +42,7 @@ class MultiStageTrainer:
         work_dir: Optional[str] = None,
         device: str = "auto",
         log_every: int = 20,
+        eval_log_every: int = 50,
         resume_from: Optional[str] = None,
         auto_resume: bool = False,
         resume_strict: bool = True,
@@ -53,6 +54,7 @@ class MultiStageTrainer:
     ) -> None:
         self.cfg = cfg
         self.log_every = int(log_every)
+        self.eval_log_every = int(eval_log_every)
         self.resume_from = resume_from
         self.auto_resume = auto_resume
         self.resume_strict = resume_strict
@@ -406,6 +408,14 @@ class MultiStageTrainer:
             best_score=best_score,
         )
 
+    @staticmethod
+    def _loader_iter_length(loader) -> Optional[int]:
+        try:
+            n = len(loader)
+        except TypeError:
+            return None
+        return int(n) if n > 0 else None
+
     def _run_loader(
         self,
         loader,
@@ -416,6 +426,7 @@ class MultiStageTrainer:
         train: bool,
         gradient_clip_val: Optional[float],
         prefix: Optional[str] = None,
+        loader_scope: Optional[str] = None,
     ) -> Dict[str, float]:
         if self.model is None:
             raise RuntimeError("Model is not initialized")
@@ -425,6 +436,7 @@ class MultiStageTrainer:
         self.model.train(train)
         sums: Dict[str, float] = {}
         count = 0
+        total_batches = self._loader_iter_length(loader) if not train else None
 
         for batch_idx, batch in enumerate(loader, start=1):
             if train and optimizer is not None:
@@ -458,6 +470,32 @@ class MultiStageTrainer:
                     batch_idx,
                     self._format_logs(interim),
                 )
+            elif (
+                not train
+                and self.eval_log_every > 0
+                and batch_idx % self.eval_log_every == 0
+            ):
+                interim = {k: v / max(count, 1) for k, v in sums.items()}
+                scope = f"[{loader_scope}] " if loader_scope else ""
+                if total_batches is not None:
+                    pct = 100.0 * float(batch_idx) / float(total_batches)
+                    self.logger.info(
+                        "%s%s batch %d/%d (%.1f%%): %s",
+                        scope,
+                        prefix,
+                        batch_idx,
+                        total_batches,
+                        pct,
+                        self._format_logs(interim),
+                    )
+                else:
+                    self.logger.info(
+                        "%s%s batch %d: %s",
+                        scope,
+                        prefix,
+                        batch_idx,
+                        self._format_logs(interim),
+                    )
 
         if count == 0:
             return {}
@@ -496,6 +534,7 @@ class MultiStageTrainer:
                     train=train,
                     gradient_clip_val=gradient_clip_val,
                     prefix=prefix,
+                    loader_scope=dataset_name,
                 )
             return self._aggregate_named_eval_logs(named_logs, prefix=prefix or ("train" if train else "val"))
         return self._run_loader(

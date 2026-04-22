@@ -6,6 +6,8 @@ trainer:
   device: auto
   work_dir: runs/factost_largest_transfer_single_target
   log_every: 50
+  # Validation / test loops: print running metrics every N batches (current/total when length is known).
+  eval_log_every: 50
 
 dataset_registry:
   METR-LA:
@@ -79,7 +81,8 @@ pipeline:
         partition_size: 1024
         partition_strategy: graph_greedy
         scaler_fit_timesteps: 50000
-        steps_per_epoch: 2048
+        # null: sum of per-partition loader lengths (InterleavedNamedLoaders default — full schedule vs fixed 2048).
+        steps_per_epoch: null
         train_strategy: round_robin
       epochs: 5
       model:

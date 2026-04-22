@@ -72,7 +72,12 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     rows = _load_rows(args.input_roots)
     dataset_order = args.datasets or None
+    # Order matters for both table rows and bar grouping. DPM (our method) is 4th among the
+    # four main LargeST-1Ch baselines. Include OpenCity display variants so they sort first
+    # instead of falling back to file iteration order (which also caused palette/fallback
+    # collisions: OpenCity-LargeST-1Ch used fallback[3] == DPM's purple).
     default_model_order = (
+        "OpenCity-LargeST-1Ch",
         "OpenCity",
         "FactoST",
         "UniST",
@@ -185,6 +190,58 @@ def write_csv(path: Path, rows: Sequence[Dict[str, object]]) -> None:
             writer.writerow(row)
 
 
+# Publication-style, colorblind-friendly palette (inspired by Okabe–Ito / Nature guidelines).
+# Every known `pretty_model_name` gets a key so we never fall back to index 3 == DPM purple.
+_MODEL_COLORS: Dict[str, str] = {
+    "OpenCity": "#0072B2",
+    "OpenCity-LargeST": "#0072B2",
+    "OpenCity-LargeST-1Ch": "#0072B2",
+    "FactoST": "#D55E00",
+    "UniST": "#009E73",
+    "DPM-STFM": "#CC79A7",
+    "DPM-Scratch": "#F0E442",
+    "DPM-StableOnly": "#56B4E9",
+    "DPM-NoDiffusion": "#E69F00",
+    "DPM-NoDisentangle": "#A6761D",
+}
+# Extras: distinct hues for any other model name (never overlap with values above)
+_EXTRA_MODEL_COLORS = [
+    "#332288",
+    "#882255",
+    "#44AA99",
+    "#AA4499",
+    "#999933",
+    "#117733",
+    "#661100",
+    "#6699CC",
+]
+
+
+def _bar_color_for_model(name: str, index: int) -> str:
+    if name in _MODEL_COLORS:
+        return _MODEL_COLORS[name]
+    h = abs(hash(name))
+    return _EXTRA_MODEL_COLORS[(h + index) % len(_EXTRA_MODEL_COLORS)]
+
+
+def _is_highlight_model(name: str) -> bool:
+    return str(name) == "DPM-STFM"
+
+
+# Short, familiar labels for x-axis when many traffic benchmarks sit side by side
+_DATASET_XLABEL_ABBREV: Dict[str, str] = {
+    "METR-LA": "M-LA",
+    "PEMS-BAY": "P-Bay",
+    "PEMS04": "PEMS-04",
+    "PEMS07": "PEMS-07",
+    "PEMS08": "PEMS-08",
+}
+
+
+def _x_labels_for_datasets(datasets: Sequence[str]) -> list[str]:
+    return [_DATASET_XLABEL_ABBREV.get(str(d), str(d)) for d in datasets]
+
+
 def make_figure(
     *,
     summary: Sequence[Dict[str, object]],
@@ -196,6 +253,7 @@ def make_figure(
     pdf_path: Path,
 ) -> None:
     try:
+        import matplotlib as mpl
         import matplotlib.pyplot as plt
         import numpy as np
     except ModuleNotFoundError as exc:
@@ -205,95 +263,107 @@ def make_figure(
         ) from exc
 
     model_names = [str(row["Model"]) for row in summary]
-    palette = {
-        "OpenCity": "#4C78A8",
-        "FactoST": "#E45756",
-        "UniST": "#54A24B",
-        "DPM-STFM": "#B279A2",
-        "DPM-Scratch": "#9D755D",
-        "DPM-StableOnly": "#72B7B2",
-        "DPM-NoDiffusion": "#F58518",
-        "DPM-NoDisentangle": "#FF9DA6",
-    }
-    fallback_cycle = [
-        "#4C78A8",
-        "#E45756",
-        "#54A24B",
-        "#B279A2",
-        "#F58518",
-        "#72B7B2",
-        "#FF9DA6",
-        "#9D755D",
-    ]
-    colors = [palette.get(name, fallback_cycle[index % len(fallback_cycle)]) for index, name in enumerate(model_names)]
+    colors = [_bar_color_for_model(name, i) for i, name in enumerate(model_names)]
 
     zero = {name: [row.get(f"{dataset} ZS") for dataset in datasets] for name, row in zip(model_names, summary)}
     few = {name: [row.get(f"{dataset} FS") for dataset in datasets] for name, row in zip(model_names, summary)}
-    gain = {
-        name: [row.get(f"{dataset} Gain") for dataset in datasets]
-        for name, row in zip(model_names, summary)
-    }
 
     plt.rcParams.update(
         {
-            "font.size": 10,
-            "axes.titlesize": 12,
-            "axes.labelsize": 10,
-            "legend.fontsize": 9,
-            "xtick.labelsize": 10,
-            "ytick.labelsize": 10,
+            "font.family": "sans-serif",
+            "font.sans-serif": ["DejaVu Sans", "Helvetica", "Arial", "Liberation Sans", "sans-serif"],
+            "font.size": 10.5,
+            "axes.titlesize": 11.5,
+            "axes.labelsize": 10.5,
+            "legend.fontsize": 9.5,
+            "xtick.labelsize": 10.0,
+            "ytick.labelsize": 9.5,
+            "axes.linewidth": 0.9,
+            "axes.edgecolor": "#2F2F2F",
+            "text.color": "#1A1A1A",
+            "axes.labelcolor": "#1A1A1A",
+            "xtick.color": "#333333",
+            "ytick.color": "#333333",
+            "figure.facecolor": "white",
+            "axes.facecolor": "#FCFCFC",
+            "grid.color": "#B0B0B0",
+            "grid.linestyle": ":",
+            "grid.linewidth": 0.6,
+            "grid.alpha": 0.6,
             "pdf.fonttype": 42,
             "ps.fonttype": 42,
         }
     )
+    # Wider with more groups so x labels (rotated) do not crowd; also raise figure height
+    # slightly for the bottom label band.
+    _n = max(len(datasets), 1)
+    # Two panels (zero-shot + few-shot); a bit wider per column than the old 3-panel layout.
+    _fig_w = min(1.6 * _n + 4.5, 18.0)
+    # Extra bottom space for slanted + abbreviated dataset names.
+    _bottom = 0.26 + min(0.12, 0.02 * _n)
+    fig, axes = plt.subplots(1, 2, figsize=(_fig_w, 4.1))
+    fig.subplots_adjust(wspace=0.28, top=0.9, bottom=_bottom)
+    fig.suptitle(title, fontsize=12.5, fontweight="600", y=0.99, color="#111111")
 
-    fig, axes = plt.subplots(1, 3, figsize=(12.8, 4.0), constrained_layout=True)
-    fig.suptitle(title, fontsize=13, y=1.02)
-
-    metric_label = f"{split.upper()} {metric.split('/')[-1].upper()}"
+    metric_label = f"{split.upper()} {metric.split('/')[-1].replace('_', ' ').upper()}"
+    _xlab = _x_labels_for_datasets(datasets)
     _plot_grouped_bars(
         axes[0],
-        datasets,
+        _xlab,
         model_names,
         zero,
         colors,
-        title="Zero-shot Transfer",
+        title="Zero-shot",
         ylabel=metric_label,
         higher_is_better=False,
     )
     _plot_grouped_bars(
         axes[1],
-        datasets,
+        _xlab,
         model_names,
         few,
         colors,
-        title="5% Few-shot Transfer",
+        title="5% few-shot",
         ylabel=metric_label,
         higher_is_better=False,
     )
-    _plot_grouped_bars(
-        axes[2],
-        datasets,
-        model_names,
-        gain,
-        colors,
-        title="Few-shot Gain",
-        ylabel=f"{split.upper()} {metric.split('/')[-1].upper()} Reduction",
-        higher_is_better=True,
-    )
 
-    handles = [plt.Rectangle((0, 0), 1, 1, color=color) for color in colors]
+    n = len(model_names)
+    ncol = min(n, 4)
+    handles = []
+    for name, color in zip(model_names, colors):
+        edge = "#1A1A1A" if _is_highlight_model(name) else "#4D4D4D"
+        lw = 1.25 if _is_highlight_model(name) else 0.6
+        rect = mpl.patches.Rectangle(
+            (0, 0),
+            1,
+            1,
+            facecolor=color,
+            edgecolor=edge,
+            linewidth=lw,
+        )
+        handles.append((name, rect))
+
+    leg_handles = [h[1] for h in handles]
+    leg_labels = [f"{h[0]} (ours)" if _is_highlight_model(h[0]) else h[0] for h in handles]
     axes[1].legend(
-        handles,
-        model_names,
+        leg_handles,
+        leg_labels,
         loc="upper center",
-        bbox_to_anchor=(0.5, -0.22),
-        ncol=len(model_names),
-        frameon=False,
+        bbox_to_anchor=(0.5, -0.2),
+        ncol=ncol,
+        frameon=True,
+        fancybox=False,
+        edgecolor="#CCCCCC",
+        facecolor="#FAFAFA",
+        borderpad=0.6,
+        labelspacing=0.4,
+        handlelength=1.2,
+        handleheight=0.9,
     )
 
-    fig.savefig(png_path, dpi=300, bbox_inches="tight")
-    fig.savefig(pdf_path, dpi=300, bbox_inches="tight")
+    fig.savefig(png_path, dpi=400, bbox_inches="tight", facecolor="white", edgecolor="none")
+    fig.savefig(pdf_path, dpi=400, bbox_inches="tight", facecolor="white", edgecolor="none")
     plt.close(fig)
 
 
@@ -317,7 +387,21 @@ def _plot_grouped_bars(
     for index, name in enumerate(model_names):
         raw_values = values_by_model[name]
         values = [float(item) if item is not None else np.nan for item in raw_values]
-        bars = ax.bar(x + offsets[index], values, width=width, color=colors[index], label=name)
+        edge_w = 1.2 if _is_highlight_model(name) else 0.55
+        edge_c = "#1A1A1A" if _is_highlight_model(name) else "#FAFAFA"
+        z = 5 + index
+        if _is_highlight_model(name):
+            z = 25
+        bars = ax.bar(
+            x + offsets[index],
+            values,
+            width=width,
+            color=colors[index],
+            label=name,
+            edgecolor=edge_c,
+            linewidth=edge_w,
+            zorder=z,
+        )
         for bar, value in zip(bars, values):
             if np.isnan(value):
                 continue
@@ -327,13 +411,22 @@ def _plot_grouped_bars(
                 f"{value:.2f}",
                 ha="center",
                 va="bottom",
-                fontsize=8,
+                fontsize=6.5,
                 rotation=90,
+                color="#2A2A2A",
+                clip_on=False,
             )
 
-    ax.set_title(title)
+    ax.set_title(title, pad=8)
     ax.set_xticks(x)
-    ax.set_xticklabels(datasets)
+    ax.set_xticklabels(
+        list(datasets),
+        rotation=32,
+        ha="right",
+        rotation_mode="anchor",
+        fontsize=8.5,
+    )
+    ax.tick_params(axis="x", which="major", length=3, pad=3)
     ax.set_ylabel(ylabel)
     ax.grid(axis="y", alpha=0.25, linewidth=0.8)
     ax.set_axisbelow(True)

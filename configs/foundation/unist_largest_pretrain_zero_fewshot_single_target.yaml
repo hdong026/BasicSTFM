@@ -6,6 +6,7 @@ trainer:
   device: auto
   work_dir: runs/unist_largest_transfer_single_target
   log_every: 50
+  eval_log_every: 50  # val/test batch progress (current/total) every N steps
 
 dataset_registry:
   METR-LA:
@@ -59,6 +60,11 @@ model:
   use_prompt: true
   num_memory_spatial: 128
   num_memory_temporal: 128
+  # Temporal patch (official UniST t_patch idea): fewer ST tokens -> much faster attention.
+  # Requires input_len+output_len divisible by this (e.g. 12+12=24 with t_patch_size: 2).
+  t_patch_size: 2
+  # factorized: per-node temporal attention + graph mix (fast on large N). joint: full (N*T)² attention.
+  attention_mode: factorized
 
 pipeline:
   stages:
@@ -80,7 +86,8 @@ pipeline:
         partition_size: 1024
         partition_strategy: graph_greedy
         scaler_fit_timesteps: 50000
-        steps_per_epoch: 2048
+        # null: sum of per-partition loader lengths (InterleavedNamedLoaders default).
+        steps_per_epoch: null
         train_strategy: round_robin
       epochs: 5
       model:

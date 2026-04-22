@@ -6,6 +6,7 @@ trainer:
   device: auto
   work_dir: runs/opencity_largest_transfer_single_target
   log_every: 50
+  eval_log_every: 50
 
 dataset_registry:
   METR-LA:
@@ -77,7 +78,8 @@ pipeline:
         partition_size: 1024
         partition_strategy: graph_greedy
         scaler_fit_timesteps: 50000
-        steps_per_epoch: 2048
+        # null: sum of per-partition loader lengths (InterleavedNamedLoaders default).
+        steps_per_epoch: null
         train_strategy: round_robin
       epochs: 5
       task:
