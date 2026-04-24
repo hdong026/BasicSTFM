@@ -5,7 +5,6 @@ trainer:
   device: auto
   work_dir: runs/dpm_v3_largest_transfer_single_target
   log_every: 50
-  eval_log_every: 50
   auto_resume: false
 dataset_registry:
   METR-LA:

@@ -6,7 +6,6 @@ trainer:
   device: auto
   work_dir: runs/dpm_v3_largest_transfer_single_target
   log_every: 50
-  eval_log_every: 50
 
 dataset_registry:
   METR-LA:
@@ -84,8 +83,7 @@ pipeline:
         partition_size: 1024
         partition_strategy: graph_greedy
         scaler_fit_timesteps: 50000
-        # null: sum of per-partition loader lengths (InterleavedNamedLoaders default).
-        steps_per_epoch: null
+        steps_per_epoch: 2048
         train_strategy: round_robin
       epochs: 2
       freeze:
