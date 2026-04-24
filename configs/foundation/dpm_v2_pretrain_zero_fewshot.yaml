@@ -1,0 +1,352 @@
+# DPM v2: same multi-stage recipe as dpm_stfm_pretrain_zero_fewshot.yaml, but Stage-I uses
+# StableTrunkEncoderV2 with optional static graph stable context (see DPMV2Backbone).
+experiment_name: dpm_v2_foundation_transfer
+seed: 42
+
+trainer:
+  type: MultiStageTrainer
+  device: auto
+  work_dir: runs/dpm_v2_foundation_transfer
+  log_every: 50
+
+dataset_registry:
+  METR-LA:
+    name: METR-LA
+    data_path: data/METR-LA/data.npz
+    graph_path: data/METR-LA/adj.npz
+    batch_size: 12
+  PEMS-BAY:
+    name: PEMS-BAY
+    data_path: data/PEMS-BAY/data.npz
+    graph_path: data/PEMS-BAY/adj.npz
+    batch_size: 6
+  PEMS04:
+    name: PEMS04
+    data_path: data/PEMS04/data.npz
+    graph_path: data/PEMS04/adj.npz
+    batch_size: 8
+  PEMS07:
+    name: PEMS07
+    data_path: data/PEMS07/data.npz
+    graph_path: data/PEMS07/adj.npz
+    batch_size: 6
+  PEMS08:
+    name: PEMS08
+    data_path: data/PEMS08/data.npz
+    graph_path: data/PEMS08/adj.npz
+    batch_size: 8
+
+dataset_groups:
+  benchmark_sources:
+    - PEMS-BAY
+    - PEMS04
+    - PEMS07
+  held_out_targets:
+    - METR-LA
+    - PEMS08
+
+data:
+  type: WindowDataModule
+  dataset_key: METR-LA
+  input_len: 12
+  output_len: 12
+  batch_size: 16
+  split: [0.7, 0.1, 0.2]
+  scaler:
+    type: standard
+
+model:
+  type: DPMV2Backbone
+  num_nodes: auto
+  input_dim: auto
+  output_dim: auto
+  input_len: auto
+  output_len: auto
+  hidden_dim: 128
+  residual_mode: forecast
+  fusion_mode: additive
+  use_frequency_branch: true
+  num_datasets: 3
+  diffusion_enabled: true
+  use_inertia_gate: true
+  use_attenuation_gate: true
+  # Stage-I graph stable context (ablation: set use_stable_graph_context: false)
+  use_stable_graph_context: true
+  stable_graph_num_layers: 1
+  stable_graph_share_weights: false
+
+pipeline:
+  stages:
+    - name: stable_trunk_pretraining
+      save_artifact: dpm_v2_stable
+      reset_data: true
+      data:
+        type: MultiDatasetWindowDataModule
+        dataset_group: benchmark_sources
+        input_len: 12
+        output_len: 12
+        batch_size: 8
+        train_strategy: proportional
+        eval_strategy: per_dataset
+        split: [0.7, 0.1, 0.2]
+        scaler:
+          type: standard
+      epochs: 2
+      freeze:
+        - all
+      unfreeze:
+        - stable_trunk.*
+      task:
+        type: StableResidualForecastingTask
+        phase: stable
+        model_mode: stable_pretrain
+        stable_target: lowfreq
+        final_weight: 1.0
+        stable_weight: 0.2
+        residual_weight: 0.2
+        spectral_weight: 0.02
+        spectral_scales: [1]
+      losses:
+        - type: mae
+          weight: 1.0
+        - type: mse
+          weight: 0.05
+      metrics:
+        - type: mae
+        - type: rmse
+      optimizer:
+        type: AdamW
+        lr: 0.001
+        weight_decay: 0.0001
+      scheduler:
+        type: CosineAnnealingLR
+        T_max: 2
+      validate_every: 1
+      gradient_clip_val: 5.0
+
+    - name: residual_diffusion_pretraining
+      save_artifact: dpm_v2_diffusion
+      load_from: dpm_v2_stable
+      strict_load: true
+      epochs: 2
+      freeze:
+        - all
+      unfreeze:
+        - residual_event_encoder.*
+        - diffusion_mechanism_learner.*
+      task:
+        type: StableResidualForecastingTask
+        phase: diffusion
+        model_mode: diffusion_pretrain
+        stable_target: lowfreq
+        final_weight: 1.0
+        stable_weight: 0.2
+        residual_weight: 0.2
+        spectral_weight: 0.02
+        spectral_scales: [1]
+      losses:
+        - type: mae
+          weight: 1.0
+        - type: mse
+          weight: 0.05
+      metrics:
+        - type: mae
+        - type: rmse
+      optimizer:
+        type: AdamW
+        lr: 0.0008
+        weight_decay: 0.0001
+      scheduler:
+        type: CosineAnnealingLR
+        T_max: 2
+      validate_every: 1
+      gradient_clip_val: 5.0
+
+    - name: joint_refinement
+      save_artifact: dpm_v2_joint
+      load_from: dpm_v2_diffusion
+      strict_load: true
+      epochs: 1
+      task:
+        type: StableResidualForecastingTask
+        phase: joint
+        model_mode: forecast
+        stable_target: lowfreq
+        final_weight: 1.0
+        stable_weight: 0.2
+        residual_weight: 0.2
+        spectral_weight: 0.02
+        spectral_scales: [1]
+      losses:
+        - type: mae
+          weight: 1.0
+        - type: mse
+          weight: 0.05
+      metrics:
+        - type: mae
+        - type: rmse
+      optimizer:
+        type: AdamW
+        lr: 0.0005
+        weight_decay: 0.0001
+      scheduler:
+        type: CosineAnnealingLR
+        T_max: 1
+      validate_every: 1
+      gradient_clip_val: 5.0
+
+    - name: metr_la_zero_shot
+      eval_only: true
+      epochs: 0
+      reset_data: true
+      data:
+        type: WindowDataModule
+        dataset_key: METR-LA
+        input_len: 12
+        output_len: 12
+        batch_size: 16
+        split: [0.7, 0.1, 0.2]
+        scaler:
+          type: standard
+      load_from: dpm_v2_joint
+      strict_load: true
+      task:
+        type: StableResidualForecastingTask
+        phase: joint
+        model_mode: forecast
+      losses:
+        - type: mae
+      metrics:
+        - type: mae
+        - type: rmse
+
+    - name: metr_la_five_percent_mechanism_tuning
+      epochs: 3
+      reset_data: true
+      data:
+        type: WindowDataModule
+        dataset_key: METR-LA
+        input_len: 12
+        output_len: 12
+        batch_size: 16
+        split: [0.7, 0.1, 0.2]
+        scaler:
+          type: standard
+      load_from: dpm_v2_joint
+      strict_load: true
+      few_shot_ratio: 0.05
+      freeze:
+        - all
+      unfreeze:
+        - residual_event_encoder.*
+        - diffusion_mechanism_learner.*
+        - fusion_predictor.*
+        - calibration_head.*
+        - stable_trunk.forecast_head.*
+      task:
+        type: StableResidualForecastingTask
+        phase: joint
+        model_mode: forecast
+        stable_target: lowfreq
+        final_weight: 1.0
+        stable_weight: 0.2
+        residual_weight: 0.2
+        spectral_weight: 0.02
+        cross_cov_weight: 0.0
+      losses:
+        - type: mae
+          weight: 1.0
+        - type: mse
+          weight: 0.05
+      metrics:
+        - type: mae
+        - type: rmse
+      optimizer:
+        type: AdamW
+        lr: 0.0005
+        weight_decay: 0.0001
+      scheduler:
+        type: CosineAnnealingLR
+        T_max: 3
+      validate_every: 1
+      gradient_clip_val: 5.0
+
+    - name: pems08_zero_shot
+      eval_only: true
+      epochs: 0
+      reset_data: true
+      data:
+        type: WindowDataModule
+        dataset_key: PEMS08
+        input_len: 12
+        output_len: 12
+        batch_size: 16
+        split: [0.7, 0.1, 0.2]
+        scaler:
+          type: standard
+      load_from: dpm_v2_joint
+      strict_load: true
+      task:
+        type: StableResidualForecastingTask
+        phase: joint
+        model_mode: forecast
+        stable_target: lowfreq
+        final_weight: 1.0
+        stable_weight: 0.2
+        residual_weight: 0.2
+        spectral_weight: 0.02
+      losses:
+        - type: mae
+      metrics:
+        - type: mae
+        - type: rmse
+
+    - name: pems08_five_percent_mechanism_tuning
+      epochs: 3
+      reset_data: true
+      data:
+        type: WindowDataModule
+        dataset_key: PEMS08
+        input_len: 12
+        output_len: 12
+        batch_size: 16
+        split: [0.7, 0.1, 0.2]
+        scaler:
+          type: standard
+      load_from: dpm_v2_joint
+      strict_load: true
+      few_shot_ratio: 0.05
+      freeze:
+        - all
+      unfreeze:
+        - residual_event_encoder.*
+        - diffusion_mechanism_learner.*
+        - fusion_predictor.*
+        - calibration_head.*
+        - stable_trunk.forecast_head.*
+      task:
+        type: StableResidualForecastingTask
+        phase: joint
+        model_mode: forecast
+        stable_target: lowfreq
+        final_weight: 1.0
+        stable_weight: 0.2
+        residual_weight: 0.2
+        spectral_weight: 0.02
+      losses:
+        - type: mae
+          weight: 1.0
+        - type: mse
+          weight: 0.05
+      metrics:
+        - type: mae
+        - type: rmse
+      optimizer:
+        type: AdamW
+        lr: 0.0005
+        weight_decay: 0.0001
+      scheduler:
+        type: CosineAnnealingLR
+        T_max: 3
+      validate_every: 1
+      gradient_clip_val: 5.0

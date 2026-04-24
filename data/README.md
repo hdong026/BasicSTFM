@@ -309,3 +309,53 @@ Common cases:
 - Raw graph edge list: convert it externally into an adjacency matrix `[N, N]`.
 
 The framework intentionally keeps dataset-specific cleaning outside the core trainer. This avoids hiding benchmark-specific assumptions in generic code.
+
+## ETTm1 / ETTm2 (ETDataset CSV)
+
+ETTm has no official adjacency. Use the dedicated preparer to build `data.npz` and **train-split-only** Pearson top-k graphs:
+
+```bash
+python scripts/data/prepare_ettm_for_basicstfm.py \
+  --input-csv data/raw_data/ETTm1/ETTm1.csv \
+  --output-dir data/ETTm1 \
+  --split 0.7 0.1 0.2 \
+  --topk 5
+
+python scripts/data/prepare_ettm_for_basicstfm.py \
+  --input-csv data/raw_data/ETTm2/ETTm2.csv \
+  --output-dir data/ETTm2 \
+  --split 0.7 0.1 0.2 \
+  --topk 5
+```
+
+Quick benchmark subset (prefix of the series):
+
+```bash
+python scripts/data/prepare_ettm_for_basicstfm.py \
+  --input-csv data/raw_data/ETTm1/ETTm1.csv \
+  --output-dir data/ETTm1_small \
+  --max-timesteps 8192 \
+  --topk 3
+
+python scripts/data/prepare_ettm_for_basicstfm.py \
+  --input-csv data/raw_data/ETTm2/ETTm2.csv \
+  --output-dir data/ETTm2_small \
+  --max-timesteps 8192 \
+  --topk 3
+```
+
+Split can be set with `--train-ratio`, `--val-ratio`, and `--test-ratio` (must all be given; sums to ~1), or with `--split 0.7 0.1 0.2`.
+
+Outputs: `data.npz` (`[T, N, 1]`), `adj_corr_topk.npz`, `adj_binary_topk.npz`, default `adj.npz` (weighted), plus `node_names.json` and `README.md`.
+
+Foundation configs: `configs/foundation/dpm_with_ettm.yaml` (with graphs) and `configs/foundation/dpm_with_ettm_nograph.yaml` (ETTm entries omit `graph_path`).
+
+## Weather (THUML Autoformer / Time-Series-Library)
+
+Preprocessed `weather.csv` is distributed with the [Autoformer Google Drive bundle](https://drive.google.com/drive/folders/1ZOYpTUa82_jCcxIdTmyr0LXQfvaM9vIy?usp=sharing) and the [TSLib Hugging Face dataset](https://huggingface.co/datasets/thuml/Time-Series-Library) (`weather/weather.csv`).
+
+```bash
+python scripts/data/prepare_weather_for_basicstfm.py --download --build-adj
+```
+
+Writes `data/Weather/data.npz` (`[T, N, 1]`) and optional `adj*.npz` (train-split Pearson top-k). See `data/Weather/README.md`.

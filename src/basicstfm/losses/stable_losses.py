@@ -35,6 +35,26 @@ def stable_forecast_loss(
     return masked_reduction((stable_pred - target).abs(), mask=mask)
 
 
+def stable_forecast_mae_per_batch_item(
+    stable_pred: torch.Tensor,
+    target: torch.Tensor,
+    mask: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """Per-batch-item mean absolute error in [B] for group-wise (graph/domain) risk splitting."""
+
+    stable_pred = ensure_4d(stable_pred)
+    target = ensure_4d(target)
+    err = (stable_pred - target).abs()
+    if mask is None:
+        return err.mean(dim=(1, 2, 3))
+    m = ensure_4d(mask)
+    while m.ndim < err.ndim:
+        m = m.unsqueeze(-1)
+    m = m.to(dtype=err.dtype, device=err.device).expand_as(err)
+    denom = m.sum(dim=(1, 2, 3)).clamp_min(1e-6)
+    return (err * m).sum(dim=(1, 2, 3)) / denom
+
+
 def trend_consistency_loss(
     stable_pred: torch.Tensor,
     target: torch.Tensor,

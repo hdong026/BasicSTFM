@@ -139,7 +139,19 @@ def infer_stage_regime(row: Mapping[str, Any]) -> str:
 
 
 def pretty_model_name(row: Mapping[str, Any]) -> str:
-    experiment_name = str(row.get("experiment_name") or "").lower()
+    experiment_name_raw = str(row.get("experiment_name") or "")
+    experiment_name = experiment_name_raw.lower()
+    # Presets from scripts/run_dpm_zs_fs_from_checkpoints.py (one row per ckpt; must not collapse).
+    zs_fs_ckpt_eval = {
+        "dpm_orig_stable": "DPM-original (stable ckpt)",
+        "dpm_orig_diffusion": "DPM-original (diffusion ckpt)",
+        "dpm_v2_stable": "DPM-v2 (stable ckpt)",
+        "dpm_v2_diffusion": "DPM-v2 (diffusion ckpt)",
+        "dpm_v3_stable": "DPM-v3 (stable ckpt)",
+        "dpm_v3_diffusion": "DPM-v3 (diffusion ckpt)",
+    }
+    if experiment_name_raw in zs_fs_ckpt_eval:
+        return zs_fs_ckpt_eval[experiment_name_raw]
     experiment_mapping = {
         "opencity_traffic_benchmark": "OpenCity",
         "opencity_largest_transfer": "OpenCity-LargeST",
@@ -160,6 +172,8 @@ def pretty_model_name(row: Mapping[str, Any]) -> str:
         "FactoSTFoundationModel": "FactoST",
         "UniSTFoundationModel": "UniST",
         "SRDSTFMBackbone": "DPM-STFM",
+        "DPMV2Backbone": "DPM-STFM-v2",
+        "DPMV3Backbone": "DPM-STFM-v3",
         "DPMSTFMBackbone": "DPM-STFM",
         "MADSTFMBackbone": "DPM-STFM",
     }

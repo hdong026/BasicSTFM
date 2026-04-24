@@ -76,5 +76,51 @@ class SRDSTFMTransferFreezeTest(unittest.TestCase):
             self.assertTrue(any(fnmatch.fnmatch(name, pat) for pat in allow_patterns))
 
 
+class DPMV2BackboneSmokeTest(unittest.TestCase):
+    def test_forward_with_graph_matches_shapes(self):
+        import_builtin_components()
+        import torch
+
+        model = MODELS.build(
+            {
+                "type": "DPMV2Backbone",
+                "num_nodes": 5,
+                "input_dim": 1,
+                "output_dim": 1,
+                "input_len": 8,
+                "output_len": 4,
+                "hidden_dim": 16,
+                "use_stable_graph_context": True,
+                "stable_graph_num_layers": 2,
+                "stable_graph_share_weights": True,
+                "num_datasets": 1,
+            }
+        )
+        b, t, n = 2, 8, 5
+        x = torch.randn(b, t, n, 1)
+        g = torch.eye(n)
+        out = model(x, graph=g, mode="forecast", target=torch.randn(b, 4, n, 1))
+        self.assertEqual(tuple(out["forecast"].shape), (b, 4, n, 1))
+
+        out_no = model(x, graph=None, mode="forecast", target=torch.randn(b, 4, n, 1))
+        self.assertEqual(tuple(out_no["forecast"].shape), (b, 4, n, 1))
+
+        off = MODELS.build(
+            {
+                "type": "DPMV2Backbone",
+                "num_nodes": 5,
+                "input_dim": 1,
+                "output_dim": 1,
+                "input_len": 8,
+                "output_len": 4,
+                "hidden_dim": 16,
+                "use_stable_graph_context": False,
+                "num_datasets": 1,
+            }
+        )
+        out_ab = off(x, graph=g, mode="forecast", target=torch.randn(b, 4, n, 1))
+        self.assertEqual(tuple(out_ab["forecast"].shape), (b, 4, n, 1))
+
+
 if __name__ == "__main__":
     unittest.main()
