@@ -56,13 +56,15 @@ class FactoSTFoundationModel(nn.Module):
         filter_matrices: Optional[tuple[str, ...]] = None,
         max_delay_steps: int = 3,
         num_prototypes: int = 8,
+        max_num_nodes: Optional[int] = None,
         pretrained_path: Optional[str] = None,
         strict_load: bool = False,
     ) -> None:
         super().__init__()
         if patch_len <= 0:
             raise ValueError("patch_len must be positive")
-        self.num_nodes = int(num_nodes)
+        emb_n = int(max_num_nodes) if max_num_nodes is not None else int(num_nodes)
+        self.num_nodes = emb_n
         self.input_dim = int(input_dim)
         self.output_dim = int(output_dim)
         self.input_len = int(input_len)
@@ -87,7 +89,7 @@ class FactoSTFoundationModel(nn.Module):
             math.ceil(self.output_len / self.patch_len) * self.patch_len,
         )
         self.patch_pos = nn.Parameter(torch.zeros(1, self.max_patches, self.hidden_dim))
-        self.node_emb = nn.Embedding(self.num_nodes, self.hidden_dim)
+        self.node_emb = nn.Embedding(emb_n, self.hidden_dim)
         self.channel_emb = nn.Embedding(self.max_channels, self.hidden_dim)
 
         self.prompt_u = nn.Parameter(torch.zeros(self.num_prompt_tokens, 1))
@@ -171,8 +173,11 @@ class FactoSTFoundationModel(nn.Module):
     def _patch(self, x: torch.Tensor) -> tuple[torch.Tensor, int, int]:
         x = ensure_4d(x)
         batch, steps, nodes, channels = x.shape
-        if nodes > self.num_nodes:
-            raise ValueError(f"Expected at most {self.num_nodes} nodes, got {nodes}")
+        if nodes > self.node_emb.num_embeddings:
+            raise ValueError(
+                f"Input has {nodes} nodes but node embedding has {self.node_emb.num_embeddings} rows; "
+                f"increase num_nodes / max_num_nodes in config."
+            )
         if channels > self.input_dim:
             raise ValueError(f"Expected at most input_dim={self.input_dim}, got {channels}")
         if channels > self.max_channels:

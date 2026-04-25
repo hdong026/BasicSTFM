@@ -19,7 +19,12 @@ from basicstfm.losses.common import LossCollection
 from basicstfm.metrics.common import MetricCollection
 from basicstfm.optim.factory import build_optimizer, build_scheduler
 from basicstfm.registry import DATAMODULES, MODELS, TASKS, TRAINERS
-from basicstfm.utils.checkpoint import load_checkpoint, read_checkpoint_metadata, save_checkpoint
+from basicstfm.utils.checkpoint import (
+    build_resume_model_dim_baseline,
+    load_checkpoint,
+    read_checkpoint_metadata,
+    save_checkpoint,
+)
 from basicstfm.utils.distributed import (
     DistributedContext,
     barrier,
@@ -94,6 +99,8 @@ class MultiStageTrainer:
         self._resume_checkpoint: Optional[str] = None
         self._resume_metadata: Dict[str, Any] = {}
         self._resume_consumed = False
+        # resume 时若跳过前序 stage，_current_model_cfg 可能未更新；用断点里/权重推断的 I/O 维与 datamodule 取 max
+        self._resume_model_baseline: Dict[str, int] = {}
         self.stage_results: list[Dict[str, Any]] = []
 
     def run(self) -> None:
@@ -758,7 +765,25 @@ class MultiStageTrainer:
         }
         for key, value in inferred.items():
             if key not in model_cfg or _is_auto(model_cfg[key]):
-                if preserve_current and self._current_model_cfg and not _is_auto(self._current_model_cfg.get(key)):
+                if key in ("num_nodes", "input_dim", "output_dim"):
+                    candidates: list[int] = [int(value)]
+                    if self._current_model_cfg and not _is_auto(
+                        self._current_model_cfg.get(key)
+                    ):
+                        try:
+                            candidates.append(int(self._current_model_cfg[key]))
+                        except (TypeError, ValueError):
+                            pass
+                    b = self._resume_model_baseline
+                    if b and key in b:
+                        try:
+                            candidates.append(int(b[key]))
+                        except (TypeError, ValueError):
+                            pass
+                    model_cfg[key] = max(candidates)
+                elif preserve_current and self._current_model_cfg and not _is_auto(
+                    self._current_model_cfg.get(key)
+                ):
                     model_cfg[key] = self._current_model_cfg[key]
                 else:
                     model_cfg[key] = value
@@ -780,6 +805,9 @@ class MultiStageTrainer:
         self._resume_checkpoint = str(path)
         self._load_stage_results()
         self._resume_metadata = read_checkpoint_metadata(str(path), map_location="cpu")
+        self._resume_model_baseline = build_resume_model_dim_baseline(str(path))
+        if self._resume_model_baseline:
+            self.logger.info("Resume model dim baseline: %s", self._resume_model_baseline)
         stage_name = self._resume_metadata.get("stage")
         if stage_name:
             self.artifacts[str(stage_name)] = str(path)
@@ -826,7 +854,7 @@ class MultiStageTrainer:
         best_score: float,
         tag: str,
     ) -> None:
-        extra = {
+        extra: Dict[str, Any] = {
             "stage": stage.name,
             "stage_index": stage_index,
             "epoch": epoch,
@@ -836,6 +864,14 @@ class MultiStageTrainer:
             "work_dir": str(self.work_dir),
             "save_artifact": stage.save_artifact,
         }
+        if self._current_model_cfg:
+            for k in ("num_nodes", "input_dim", "output_dim"):
+                v = self._current_model_cfg.get(k)
+                if v is not None and not _is_auto(v):
+                    try:
+                        extra[k] = int(v)
+                    except (TypeError, ValueError):
+                        pass
         if self.distributed.is_main_process:
             save_checkpoint(
                 str(path),

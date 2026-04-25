@@ -116,8 +116,6 @@ class SRDSTFMBackbone(nn.Module):
         mask: Optional[torch.Tensor],
     ) -> tuple[torch.Tensor, Optional[torch.Tensor], int]:
         x = ensure_4d(x)
-        if x.shape[2] > self.num_nodes:
-            raise ValueError(f"Expected at most {self.num_nodes} nodes, got {x.shape[2]}")
         if x.shape[-1] > self.input_dim:
             raise ValueError(f"Expected at most {self.input_dim} channels, got {x.shape[-1]}")
 

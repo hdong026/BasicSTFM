@@ -123,8 +123,7 @@ class DPMV2Backbone(nn.Module):
         mask: Optional[torch.Tensor],
     ) -> tuple[torch.Tensor, Optional[torch.Tensor], int]:
         x = ensure_4d(x)
-        if x.shape[2] > self.num_nodes:
-            raise ValueError(f"Expected at most {self.num_nodes} nodes, got {x.shape[2]}")
+        # num_nodes 仅作配置/元数据占位，不限制前向的 N（支持跨图迁移到更大/更小目标图）。
         if x.shape[-1] > self.input_dim:
             raise ValueError(f"Expected at most {self.input_dim} channels, got {x.shape[-1]}")
 

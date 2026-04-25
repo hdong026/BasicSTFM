@@ -34,11 +34,13 @@ class TinySTFoundationModel(nn.Module):
         ffn_dim: int = 256,
         dropout: float = 0.1,
         max_seq_len: int = 512,
+        max_num_nodes: Optional[int] = None,
     ) -> None:
         super().__init__()
         if hidden_dim % num_heads != 0:
             raise ValueError("hidden_dim must be divisible by num_heads")
-        self.num_nodes = num_nodes
+        emb_n = int(max_num_nodes) if max_num_nodes is not None else int(num_nodes)
+        self.num_nodes = emb_n
         self.input_dim = input_dim
         self.output_dim = output_dim
         self.input_len = input_len
@@ -47,7 +49,7 @@ class TinySTFoundationModel(nn.Module):
         self.max_seq_len = max_seq_len
 
         self.input_proj = nn.Linear(input_dim, hidden_dim)
-        self.node_emb = nn.Embedding(num_nodes, hidden_dim)
+        self.node_emb = nn.Embedding(emb_n, hidden_dim)
         self.temporal_pos = nn.Parameter(torch.zeros(1, max_seq_len, 1, hidden_dim))
         self.mask_token = nn.Parameter(torch.zeros(1, 1, 1, hidden_dim))
 
@@ -81,8 +83,11 @@ class TinySTFoundationModel(nn.Module):
         mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         batch, steps, nodes, _ = x.shape
-        if nodes != self.num_nodes:
-            raise ValueError(f"Expected {self.num_nodes} nodes, got {nodes}")
+        if nodes > self.node_emb.num_embeddings:
+            raise ValueError(
+                f"Input has {nodes} nodes but node embedding has {self.node_emb.num_embeddings} rows; "
+                f"increase num_nodes / max_num_nodes in config."
+            )
         if steps > self.max_seq_len:
             raise ValueError(f"Input length {steps} exceeds max_seq_len={self.max_seq_len}")
 

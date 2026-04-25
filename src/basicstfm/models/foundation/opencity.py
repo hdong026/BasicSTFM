@@ -73,11 +73,13 @@ class OpenCityFoundationModel(nn.Module):
         dropout: float = 0.1,
         drop_path: float = 0.0,
         max_seq_len: int = 4096,
+        max_num_nodes: Optional[int] = None,
         pretrained_path: Optional[str] = None,
         strict_load: bool = False,
     ) -> None:
         super().__init__()
-        self.num_nodes = int(num_nodes)
+        emb_n = int(max_num_nodes) if max_num_nodes is not None else int(num_nodes)
+        self.num_nodes = emb_n
         self.input_dim = int(input_dim)
         self.output_dim = int(output_dim)
         self.input_len = int(input_len)
@@ -86,7 +88,7 @@ class OpenCityFoundationModel(nn.Module):
         self.max_seq_len = int(max_seq_len)
 
         self.value_proj = nn.Linear(self.input_dim, self.hidden_dim)
-        self.node_emb = nn.Embedding(self.num_nodes, self.hidden_dim)
+        self.node_emb = nn.Embedding(emb_n, self.hidden_dim)
         self.temporal_pos = nn.Parameter(torch.zeros(1, self.max_seq_len, 1, self.hidden_dim))
         self.mask_token = nn.Parameter(torch.zeros(1, 1, 1, self.hidden_dim))
 
@@ -128,8 +130,11 @@ class OpenCityFoundationModel(nn.Module):
     ) -> torch.Tensor:
         x = ensure_4d(x)
         batch, steps, nodes, channels = x.shape
-        if nodes > self.num_nodes:
-            raise ValueError(f"Expected at most {self.num_nodes} nodes, got {nodes}")
+        if nodes > self.node_emb.num_embeddings:
+            raise ValueError(
+                f"Input has {nodes} nodes but node embedding has {self.node_emb.num_embeddings} rows; "
+                f"increase num_nodes / max_num_nodes in config."
+            )
         if channels > self.input_dim:
             raise ValueError(f"Expected at most input_dim={self.input_dim}, got {channels}")
         if steps > self.max_seq_len:

@@ -28,6 +28,7 @@ class MLPForecaster(nn.Module):
         super().__init__()
         if num_layers < 1:
             raise ValueError("num_layers must be >= 1")
+        # num_nodes 仅作元数据；MLP 权重与 N 无关，前向使用任意 N。
         self.num_nodes = num_nodes
         self.output_len = output_len
         self.output_dim = output_dim
@@ -48,8 +49,6 @@ class MLPForecaster(nn.Module):
     ):
         del graph, mode
         batch, _, nodes, _ = x.shape
-        if nodes != self.num_nodes:
-            raise ValueError(f"Expected {self.num_nodes} nodes, got {nodes}")
         x = x.permute(0, 2, 1, 3).reshape(batch * nodes, -1)
         forecast = self.net(x)
         forecast = forecast.reshape(batch, nodes, self.output_len, self.output_dim)

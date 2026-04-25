@@ -10,6 +10,51 @@ import numpy as np
 import torch
 
 
+def adapt_checkpoint_state_dict(
+    model: torch.nn.Module,
+    checkpoint_state: Dict[str, torch.Tensor],
+) -> Dict[str, torch.Tensor]:
+    """Align a checkpoint to the current model, expanding small node/channel embedding tables.
+
+    Used when transfer stages use a larger graph or ``max_num_nodes`` than pretraining (e.g. 256 → 307).
+    Extra rows keep the model's current initialization. Other shape mismatches raise.
+    """
+
+    model_state = model.state_dict()
+    out: Dict[str, Any] = {}
+    for name, param in model_state.items():
+        if name not in checkpoint_state:
+            out[name] = param
+            continue
+        tensor = checkpoint_state[name]
+        if not isinstance(tensor, torch.Tensor):
+            out[name] = tensor
+            continue
+        if tensor.shape == param.shape:
+            out[name] = tensor
+            continue
+        if (
+            tensor.ndim == 2
+            and param.ndim == 2
+            and tensor.shape[1] == param.shape[1]
+            and param.shape[0] > tensor.shape[0]
+            and (
+                "node_emb" in name
+                or "channel_emb" in name
+            )
+        ):
+            buf = param.clone()
+            src = tensor.to(device=buf.device, dtype=buf.dtype)
+            buf[: src.shape[0]].copy_(src)
+            out[name] = buf
+        else:
+            raise RuntimeError(
+                f"Cannot load {name!r}: checkpoint shape {tuple(tensor.shape)} "
+                f"vs model {tuple(param.shape)}"
+            )
+    return out
+
+
 def save_checkpoint(
     path: str,
     model: torch.nn.Module,
@@ -41,6 +86,12 @@ def load_checkpoint(
 ) -> Dict[str, Any]:
     ckpt = torch_load(path, map_location=map_location)
     state_dict = ckpt.get("model", ckpt)
+    try:
+        state_dict = adapt_checkpoint_state_dict(model, state_dict)
+    except RuntimeError as exc:
+        raise RuntimeError(
+            f"Checkpoint incompatible with current model: {exc}"
+        ) from exc
     missing, unexpected = model.load_state_dict(state_dict, strict=strict)
     if optimizer is not None and "optimizer" in ckpt:
         optimizer.load_state_dict(ckpt["optimizer"])
@@ -62,6 +113,59 @@ def read_checkpoint_metadata(path: str, map_location: str = "cpu") -> Dict[str, 
     if isinstance(ckpt, dict):
         return dict(ckpt.get("extra", {}))
     return {}
+
+
+def build_resume_model_dim_baseline(path: str) -> Dict[str, int]:
+    """Load ``input_dim`` / ``output_dim`` / ``num_nodes`` from checkpoint ``extra`` or state tensors.
+
+    Used on resume when earlier stages are skipped and the trainer must align model I/O
+    with the last saved weights (e.g. fixed 18-d pretrain vs 3-d target data).
+    """
+
+    ckpt = torch_load(path, map_location="cpu")
+    if not isinstance(ckpt, dict):
+        return {}
+    out: Dict[str, int] = {}
+    extra = ckpt.get("extra") or {}
+    for key in ("num_nodes", "input_dim", "output_dim"):
+        if key in extra:
+            try:
+                out[key] = int(extra[key])  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                pass
+    if len(out) >= 3:
+        return out
+
+    state = ckpt.get("model")
+    if not isinstance(state, dict):
+        return out
+
+    for name, tensor in state.items():
+        if not isinstance(tensor, torch.Tensor):
+            continue
+        if "stable_trunk" in name and "local_branch.0.weight" in name and tensor.ndim == 4:
+            try:
+                in_ch = int(tensor.shape[1])
+                out["input_dim"] = max(out.get("input_dim", 0), in_ch)
+            except (TypeError, ValueError):
+                pass
+        if "node_emb" in name and name.endswith("weight") and tensor.ndim == 2:
+            try:
+                n = int(tensor.shape[0])
+                out["num_nodes"] = max(out.get("num_nodes", 0), n)
+            except (TypeError, ValueError):
+                pass
+        if "channel_emb" in name and name.endswith("weight") and tensor.ndim == 2:
+            try:
+                c = int(tensor.shape[0])
+                out["output_dim"] = max(out.get("output_dim", 0), c)
+            except (TypeError, ValueError):
+                pass
+    if out.get("input_dim") and not out.get("output_dim"):
+        out["output_dim"] = out["input_dim"]
+    if out.get("output_dim") and not out.get("input_dim"):
+        out["input_dim"] = out["output_dim"]
+    return out
 
 
 def collect_rng_state() -> Dict[str, Any]:

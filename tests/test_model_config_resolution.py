@@ -104,6 +104,47 @@ class ModelConfigResolutionTest(unittest.TestCase):
         self.assertEqual(resolved["input_len"], 36)
         self.assertEqual(resolved["output_len"], 18)
 
+    def test_num_nodes_maxes_with_preserved_config_for_larger_target_graph(self):
+        """Pretrain on N=256 then transfer to N=307 → use max(256, 307) for embedding rows."""
+        cfg = {
+            "data": {"type": "unused"},
+            "model": {"type": "TinySTFoundationModel"},
+            "pipeline": {"stages": [{"name": "forecasting", "task": {"type": "ForecastingTask"}}]},
+        }
+        trainer = MultiStageTrainer(cfg, dry_run=True)
+
+        class LargerGraphDataModule:
+            def get_metadata(self):
+                return {
+                    "data_shape": (100, 307, 1),
+                    "num_nodes": 307,
+                    "num_channels": 1,
+                    "input_len": 12,
+                    "target_len": 12,
+                }
+
+        trainer.datamodule = LargerGraphDataModule()
+        trainer._current_model_cfg = {
+            "type": "TinySTFoundationModel",
+            "num_nodes": 256,
+            "input_dim": 1,
+            "output_dim": 1,
+            "input_len": 12,
+            "output_len": 12,
+        }
+        resolved = trainer._resolve_model_config(
+            {
+                "type": "TinySTFoundationModel",
+                "num_nodes": "auto",
+                "input_dim": "auto",
+                "output_dim": "auto",
+                "input_len": "auto",
+                "output_len": "auto",
+            },
+            preserve_current=True,
+        )
+        self.assertEqual(resolved["num_nodes"], 307)
+
 
 if __name__ == "__main__":
     unittest.main()
