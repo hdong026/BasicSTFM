@@ -1,0 +1,193 @@
+# UniST — masked reconstruction pretrain (no prompt in stage 1), then METR-LA
+# mask-completion transfer with prompt, and 5% few-shot prompt+head tuning.
+# Backbone weights load is partial; strict_load is false for schedule compatibility.
+# window length 96/96; round_robin and per-dataset max_train_windows match other lines.
+
+experiment_name: unist_cross_domain_pretrain_transfer
+seed: 42
+
+trainer:
+  type: MultiStageTrainer
+  device: auto
+  work_dir: runs/unist_cross_domain_pretrain_transfer
+  log_every: 50
+
+dataset_registry:
+  LargeST:
+    name: LargeST
+    data_path: data/LargeST/data.npz
+    graph_path: data/LargeST/adj.npz
+    batch_size: 1
+    max_train_windows: 10000
+  KnowAir:
+    name: KnowAir
+    data_path: data/KnowAir/data.npz
+    graph_path: data/KnowAir/adj.npz
+    batch_size: 4
+    max_train_windows: 80000
+  Weather:
+    name: Weather
+    data_path: data/Weather/data.npz
+    graph_path: data/Weather/adj.npz
+    batch_size: 8
+    max_train_windows: 60000
+  ETTm1:
+    name: ETTm1
+    data_path: data/ETTm1/data.npz
+    graph_path: data/ETTm1/adj.npz
+    batch_size: 8
+    max_train_windows: 50000
+  ETTm2:
+    name: ETTm2
+    data_path: data/ETTm2/data.npz
+    graph_path: data/ETTm2/adj.npz
+    batch_size: 8
+    max_train_windows: 50000
+  METR-LA:
+    name: METR-LA
+    data_path: data/METR-LA/data.npz
+    graph_path: data/METR-LA/adj.npz
+    batch_size: 16
+
+dataset_groups:
+  cross_domain_sources:
+    - LargeST
+    - KnowAir
+    - Weather
+    - ETTm1
+  held_out_transfer_target:
+    - METR-LA
+
+data:
+  type: WindowDataModule
+  dataset_key: METR-LA
+  input_len: 96
+  output_len: 96
+  batch_size: 16
+  split: [0.7, 0.1, 0.2]
+  scaler:
+    type: standard
+
+model:
+  type: UniSTFoundationModel
+  num_nodes: auto
+  input_dim: auto
+  output_dim: auto
+  input_len: auto
+  output_len: auto
+  hidden_dim: 128
+  encoder_layers: 6
+  decoder_layers: 4
+  num_heads: 8
+  ffn_dim: 256
+  use_prompt: true
+  num_memory_spatial: 128
+  num_memory_temporal: 128
+
+pipeline:
+  stages:
+    - name: unist_cross_domain_pretrain
+      save_artifact: unist_xd_pretrain
+      reset_data: true
+      data:
+        type: MultiDatasetWindowDataModule
+        dataset_group: cross_domain_sources
+        input_len: 96
+        output_len: 96
+        num_workers: 2
+        train_strategy: round_robin
+        eval_strategy: per_dataset
+        steps_per_epoch: 1000
+        split: [0.7, 0.1, 0.2]
+        scaler:
+          type: standard
+      epochs: 5
+      model:
+        use_prompt: false
+      task:
+        type: MaskedReconstructionTask
+        mask_ratio: 0.5
+        mask_strategy: mixed
+        mask_strategies: [random, temporal, tube, block]
+      losses:
+        - type: mse
+      metrics:
+        - type: mae
+      optimizer:
+        type: AdamW
+        lr: 0.001
+        weight_decay: 0.0001
+      scheduler:
+        type: CosineAnnealingLR
+        T_max: 5
+      validate_every: 1
+      gradient_clip_val: 5.0
+
+    - name: metr_la_zero_shot
+      eval_only: true
+      epochs: 0
+      reset_data: true
+      data:
+        type: WindowDataModule
+        dataset_key: METR-LA
+        input_len: 96
+        output_len: 96
+        batch_size: 16
+        split: [0.7, 0.1, 0.2]
+        scaler:
+          type: standard
+      load_from: unist_xd_pretrain
+      load_method: load_backbone_weights
+      strict_load: false
+      model:
+        use_prompt: true
+      task:
+        type: MaskedForecastCompletionTask
+      losses:
+        - type: mae
+      metrics:
+        - type: mae
+        - type: rmse
+
+    - name: metr_la_five_percent_prompt_tuning
+      epochs: 3
+      reset_data: true
+      data:
+        type: WindowDataModule
+        dataset_key: METR-LA
+        input_len: 96
+        output_len: 96
+        batch_size: 16
+        split: [0.7, 0.1, 0.2]
+        scaler:
+          type: standard
+      load_from: unist_xd_pretrain
+      load_method: load_backbone_weights
+      strict_load: false
+      model:
+        use_prompt: true
+      few_shot_ratio: 0.05
+      freeze:
+        - all
+      unfreeze:
+        - prompt.*
+        - reconstruction_head.*
+      task:
+        type: MaskedForecastCompletionTask
+      losses:
+        - type: mae
+          weight: 1.0
+        - type: mse
+          weight: 0.05
+      metrics:
+        - type: mae
+        - type: rmse
+      optimizer:
+        type: AdamW
+        lr: 0.0005
+        weight_decay: 0.0001
+      scheduler:
+        type: CosineAnnealingLR
+        T_max: 3
+      validate_every: 1
+      gradient_clip_val: 5.0

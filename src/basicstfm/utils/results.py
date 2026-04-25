@@ -162,6 +162,14 @@ def pretty_model_name(row: Mapping[str, Any]) -> str:
         "srd_stfm_ablation_stable_only": "DPM-StableOnly",
         "srd_stfm_ablation_no_diffusion": "DPM-NoDiffusion",
         "srd_stfm_ablation_no_disentangle": "DPM-NoDisentangle",
+        # Cross-domain (XD) pretrain recipes under configs/cross_domain and foundation
+        "dpm_cross_domain_pretrain_transfer": "DPM-v3 (XD)",
+        "dpm_v3_cross_domain_pretrain_transfer": "DPM-v3 (XD)",
+        "dpm_v2_cross_domain_pretrain_transfer": "DPM-v2 (XD)",
+        "dpm_stfm_cross_domain_pretrain_transfer": "DPM-SR (XD)",
+        "opencity_cross_domain_pretrain_transfer": "OpenCity (XD)",
+        "factost_cross_domain_pretrain_transfer": "FactoST (XD)",
+        "unist_cross_domain_pretrain_transfer": "UniST (XD)",
     }
     if experiment_name in experiment_mapping:
         return experiment_mapping[experiment_name]

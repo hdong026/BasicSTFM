@@ -66,6 +66,44 @@ class MultiDatasetDataModuleTest(unittest.TestCase):
             self.assertIsInstance(val_loaders, dict)
             self.assertEqual(set(val_loaders.keys()), {"A", "B"})
 
+    def test_max_train_windows_limits_train_set_per_dataset(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            ds_a = root / "A"
+            ds_b = root / "B"
+            ds_a.mkdir()
+            ds_b.mkdir()
+
+            np.savez(ds_a / "data.npz", data=np.random.randn(200, 5, 1).astype(np.float32))
+            np.savez(ds_a / "adj.npz", adj=np.eye(5, dtype=np.float32))
+            np.savez(ds_b / "data.npz", data=np.random.randn(200, 7, 2).astype(np.float32))
+            np.savez(ds_b / "adj.npz", adj=np.eye(7, dtype=np.float32))
+
+            datamodule = MultiDatasetWindowDataModule(
+                datasets=[
+                    {
+                        "name": "A",
+                        "data_path": str(ds_a / "data.npz"),
+                        "graph_path": str(ds_a / "adj.npz"),
+                        "max_train_windows": 3,
+                    },
+                    {"name": "B", "data_path": str(ds_b / "data.npz"), "graph_path": str(ds_b / "adj.npz")},
+                ],
+                input_len=4,
+                output_len=2,
+                batch_size=3,
+                split=(0.6, 0.2, 0.2),
+                train_strategy="round_robin",
+                eval_strategy="per_dataset",
+                steps_per_epoch=2,
+            )
+            datamodule.setup()
+            # Train split length for A: 0.6 * 200 = 120, windows = 120 - 4 - 2 + 1 = 115
+            a_train_len = len(datamodule.datasets_by_split["train"]["A"])
+            self.assertEqual(a_train_len, 3)
+            b_train_len = len(datamodule.datasets_by_split["train"]["B"])
+            self.assertGreater(b_train_len, 3)
+
     def test_multi_dataset_batches_flow_through_foundation_task(self):
         import_builtin_components()
         with tempfile.TemporaryDirectory() as tmpdir:

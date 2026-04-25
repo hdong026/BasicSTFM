@@ -299,6 +299,8 @@ class WindowDataModule:
         seed: int = 42,
         name: Optional[str] = None,
         mmap_mode: Optional[str] = None,
+        max_val_windows: Optional[int] = None,
+        max_test_windows: Optional[int] = None,
     ) -> None:
         if output_len is not None:
             target_len = output_len
@@ -327,6 +329,8 @@ class WindowDataModule:
         self.seed = int(seed)
         self.mmap_mode = mmap_mode
         self._epoch = 0
+        self.max_val_windows = None if max_val_windows is None else int(max_val_windows)
+        self.max_test_windows = None if max_test_windows is None else int(max_test_windows)
         self.scaler = build_scaler(self.scaler_cfg)
         self.graph: Optional[torch.Tensor] = None
         self.datasets: Dict[str, Dataset] = {}
@@ -348,10 +352,16 @@ class WindowDataModule:
         self.scaler.fit(train_raw)
 
         train_dataset = WindowDataset(train_raw, self.input_len, self.target_len, self.stride)
+        val_ds: Dataset = WindowDataset(val_raw, self.input_len, self.target_len, self.stride)
+        test_ds: Dataset = WindowDataset(test_raw, self.input_len, self.target_len, self.stride)
+        if self.max_val_windows is not None:
+            val_ds = self._limit_dataset(val_ds, windows=self.max_val_windows)
+        if self.max_test_windows is not None:
+            test_ds = self._limit_dataset(test_ds, windows=self.max_test_windows)
         self.datasets = {
             "train": self._limit_train_dataset(train_dataset),
-            "val": WindowDataset(val_raw, self.input_len, self.target_len, self.stride),
-            "test": WindowDataset(test_raw, self.input_len, self.target_len, self.stride),
+            "val": val_ds,
+            "test": test_ds,
         }
 
         if self.graph_path:
@@ -841,6 +851,8 @@ class MultiDatasetWindowDataModule:
         world_size: int = 1,
         rank: int = 0,
         mmap_mode: Optional[str] = None,
+        max_val_windows: Optional[int] = None,
+        max_test_windows: Optional[int] = None,
     ) -> None:
         if output_len is not None:
             target_len = output_len
@@ -873,6 +885,8 @@ class MultiDatasetWindowDataModule:
         self.rank = int(rank)
         self._epoch = 0
         self.mmap_mode = mmap_mode
+        self.max_val_windows = None if max_val_windows is None else int(max_val_windows)
+        self.max_test_windows = None if max_test_windows is None else int(max_test_windows)
 
         self.datasets_by_split: Dict[str, Dict[str, Dataset]] = {"train": {}, "val": {}, "test": {}}
         self.graphs: Dict[str, Optional[torch.Tensor]] = {}
@@ -928,12 +942,18 @@ class MultiDatasetWindowDataModule:
             self.max_num_nodes = max(self.max_num_nodes, int(array.shape[1]))
             self.max_num_channels = max(self.max_num_channels, int(array.shape[2]))
 
-            self.datasets_by_split["train"][name] = WindowDataset(
+            train_ds: Dataset = WindowDataset(
                 train_raw,
                 self.input_len,
                 self.target_len,
                 int(cfg["stride"]),
             )
+            if cfg.get("max_train_windows") is not None:
+                train_ds = WindowDataModule._limit_dataset(
+                    train_ds,
+                    windows=int(cfg["max_train_windows"]),
+                )
+            self.datasets_by_split["train"][name] = train_ds
             self.datasets_by_split["val"][name] = WindowDataset(
                 val_raw,
                 self.input_len,
@@ -1046,6 +1066,11 @@ class MultiDatasetWindowDataModule:
         if not data_path:
             raise ValueError("Each multi-dataset entry must define data_path")
         name = str(cfg.get("name") or Path(data_path).parent.name or Path(data_path).stem)
+        mtw = cfg.get("max_train_windows")
+        if mtw is not None:
+            mtw = int(mtw)
+            if mtw <= 0:
+                raise ValueError("max_train_windows must be positive when set")
         return {
             "name": name,
             "data_path": str(data_path),
@@ -1056,6 +1081,7 @@ class MultiDatasetWindowDataModule:
             "stride": int(cfg.get("stride", self.default_stride)),
             "scaler": dict(cfg.get("scaler", self.default_scaler_cfg)),
             "batch_size": int(cfg.get("batch_size", self.batch_size)),
+            "max_train_windows": mtw,
         }
 
     def _make_split_loaders(
@@ -1072,6 +1098,14 @@ class MultiDatasetWindowDataModule:
                 if split == "train"
                 else dataset
             )
+            if split == "val" and self.max_val_windows is not None:
+                materialized = WindowDataModule._limit_dataset(
+                    materialized, windows=self.max_val_windows
+                )
+            if split == "test" and self.max_test_windows is not None:
+                materialized = WindowDataModule._limit_dataset(
+                    materialized, windows=self.max_test_windows
+                )
             sampler = self._build_sampler(
                 materialized,
                 shuffle=shuffle,

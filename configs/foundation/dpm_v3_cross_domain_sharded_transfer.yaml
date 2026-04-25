@@ -1,0 +1,673 @@
+# DPM v3 — sharded cross-domain pretrain + 5 targets (same recipe as other lines).
+# Sibling configs: configs/cross_domain/dpm_v3_cross_domain_sharded_transfer.yaml (identical),
+#   dpm_v2_*, dpm_stfm_*, unist_*, opencity_*, factost_*_sharded_transfer.yaml
+#
+# Prerequisites:
+#   python scripts/data/build_largest_cross_domain_shards.py --num-shards 2 --target-nodes 256
+#
+# Pretrain budget: 10000 steps/epoch × (4+4+2) pretrain stages = 100000 optimizer steps total.
+# Split everywhere: [0.7, 0.1, 0.2]. Training mix: round_robin across 5 sources.
+
+experiment_name: dpm_v3_cross_domain_sharded_transfer
+seed: 42
+
+trainer:
+  type: MultiStageTrainer
+  device: auto
+  work_dir: runs/dpm_v3_cross_domain_sharded_transfer
+  log_every: 50
+
+dataset_registry:
+  LargeST_xd_part0:
+    name: LargeST_xd_part0
+    data_path: data/LargeST_xd_part0/data.npz
+    graph_path: data/LargeST_xd_part0/adj.npz
+    batch_size: 4
+  LargeST_xd_part1:
+    name: LargeST_xd_part1
+    data_path: data/LargeST_xd_part1/data.npz
+    graph_path: data/LargeST_xd_part1/adj.npz
+    batch_size: 4
+  KnowAir:
+    name: KnowAir
+    data_path: data/KnowAir/data.npz
+    graph_path: data/KnowAir/adj.npz
+    batch_size: 4
+  Weather:
+    name: Weather
+    data_path: data/Weather/data.npz
+    graph_path: data/Weather/adj.npz
+    batch_size: 4
+  ETTm1:
+    name: ETTm1
+    data_path: data/ETTm1/data.npz
+    graph_path: data/ETTm1/adj.npz
+    batch_size: 4
+  METR-LA:
+    name: METR-LA
+    data_path: data/METR-LA/data.npz
+    graph_path: data/METR-LA/adj.npz
+    batch_size: 8
+  PEMS04:
+    name: PEMS04
+    data_path: data/PEMS04/data.npz
+    graph_path: data/PEMS04/adj.npz
+    batch_size: 8
+  PEMS07:
+    name: PEMS07
+    data_path: data/PEMS07/data.npz
+    graph_path: data/PEMS07/adj.npz
+    batch_size: 8
+  PEMS08:
+    name: PEMS08
+    data_path: data/PEMS08/data.npz
+    graph_path: data/PEMS08/adj.npz
+    batch_size: 8
+  ETTm2:
+    name: ETTm2
+    data_path: data/ETTm2/data.npz
+    graph_path: data/ETTm2/adj.npz
+    batch_size: 8
+
+dataset_groups:
+  cross_domain_sharded_sources:
+    - LargeST_xd_part0
+    - LargeST_xd_part1
+    - KnowAir
+    - Weather
+    - ETTm1
+
+data:
+  type: WindowDataModule
+  dataset_key: METR-LA
+  input_len: 96
+  output_len: 96
+  batch_size: 8
+  split: [0.7, 0.1, 0.2]
+  scaler:
+    type: standard
+
+model:
+  type: DPMV3Backbone
+  num_nodes: auto
+  input_dim: auto
+  output_dim: auto
+  input_len: auto
+  output_len: auto
+  hidden_dim: 128
+  residual_mode: forecast
+  fusion_mode: additive
+  use_frequency_branch: true
+  num_datasets: 5
+  diffusion_enabled: true
+  use_inertia_gate: true
+  use_attenuation_gate: true
+  use_stable_graph_context: true
+  stable_graph_num_layers: 1
+  stable_graph_share_weights: false
+
+# --- Shared MultiDataset data recipe (repeated in each pretrain stage for clarity) ---
+# Source pretrain: max_val_windows=256, max_test_windows=512
+# (Quick-run caps; val/test *split* remains 0.1/0.2 of timesteps, then subset to at most N windows.)
+
+pipeline:
+  stages:
+    - name: cross_domain_stable_trunk_pretraining
+      save_artifact: dpm_xd_stable
+      reset_data: true
+      data:
+        type: MultiDatasetWindowDataModule
+        dataset_group: cross_domain_sharded_sources
+        input_len: 96
+        output_len: 96
+        num_workers: 2
+        train_strategy: round_robin
+        eval_strategy: per_dataset
+        steps_per_epoch: 10000
+        max_val_windows: 256
+        max_test_windows: 512
+        split: [0.7, 0.1, 0.2]
+        scaler:
+          type: standard
+      epochs: 4
+      freeze:
+        - all
+      unfreeze:
+        - stable_trunk.*
+      task:
+        type: StableResidualForecastingTaskV3
+        phase: stable
+        model_mode: stable_pretrain
+        stable_target: lowfreq
+        final_weight: 1.0
+        stable_weight: 0.2
+        residual_weight: 0.2
+        spectral_weight: 0.02
+        spectral_scales: [1]
+        robust_stage1: true
+        robust_lambda: 0.3
+        robust_temperature: 1.0
+        robust_ema_momentum: 0.95
+        robust_use_standardized_risk: true
+        robust_topk_groups: 0
+        robust_group_key: dataset
+        log_aux_losses: true
+      losses:
+        - type: mae
+          weight: 1.0
+        - type: mse
+          weight: 0.05
+      metrics:
+        - type: mae
+        - type: rmse
+      optimizer:
+        type: AdamW
+        lr: 0.001
+        weight_decay: 0.0001
+      scheduler:
+        type: CosineAnnealingLR
+        T_max: 4
+      validate_every: 1
+      gradient_clip_val: 5.0
+
+    - name: cross_domain_residual_diffusion_pretraining
+      save_artifact: dpm_xd_diffusion
+      load_from: dpm_xd_stable
+      strict_load: true
+      reset_data: true
+      data:
+        type: MultiDatasetWindowDataModule
+        dataset_group: cross_domain_sharded_sources
+        input_len: 96
+        output_len: 96
+        num_workers: 2
+        train_strategy: round_robin
+        eval_strategy: per_dataset
+        steps_per_epoch: 10000
+        max_val_windows: 256
+        max_test_windows: 512
+        split: [0.7, 0.1, 0.2]
+        scaler:
+          type: standard
+      epochs: 4
+      freeze:
+        - all
+      unfreeze:
+        - residual_event_encoder.*
+        - diffusion_mechanism_learner.*
+      task:
+        type: StableResidualForecastingTask
+        phase: diffusion
+        model_mode: diffusion_pretrain
+        stable_target: lowfreq
+        final_weight: 1.0
+        stable_weight: 0.2
+        residual_weight: 0.2
+        spectral_weight: 0.02
+        spectral_scales: [1]
+      losses:
+        - type: mae
+          weight: 1.0
+        - type: mse
+          weight: 0.05
+      metrics:
+        - type: mae
+        - type: rmse
+      optimizer:
+        type: AdamW
+        lr: 0.0008
+        weight_decay: 0.0001
+      scheduler:
+        type: CosineAnnealingLR
+        T_max: 4
+      validate_every: 1
+      gradient_clip_val: 5.0
+
+    - name: cross_domain_joint_refinement
+      save_artifact: dpm_xd_joint
+      load_from: dpm_xd_diffusion
+      strict_load: true
+      reset_data: true
+      data:
+        type: MultiDatasetWindowDataModule
+        dataset_group: cross_domain_sharded_sources
+        input_len: 96
+        output_len: 96
+        num_workers: 2
+        train_strategy: round_robin
+        eval_strategy: per_dataset
+        steps_per_epoch: 10000
+        max_val_windows: 256
+        max_test_windows: 512
+        split: [0.7, 0.1, 0.2]
+        scaler:
+          type: standard
+      epochs: 2
+      task:
+        type: StableResidualForecastingTask
+        phase: joint
+        model_mode: forecast
+        stable_target: lowfreq
+        final_weight: 1.0
+        stable_weight: 0.2
+        residual_weight: 0.2
+        spectral_weight: 0.02
+        spectral_scales: [1]
+      losses:
+        - type: mae
+          weight: 1.0
+        - type: mse
+          weight: 0.05
+      metrics:
+        - type: mae
+        - type: rmse
+      optimizer:
+        type: AdamW
+        lr: 0.0005
+        weight_decay: 0.0001
+      scheduler:
+        type: CosineAnnealingLR
+        T_max: 2
+      validate_every: 1
+      gradient_clip_val: 5.0
+
+    # ---- Targets: zero-shot (eval) + 5% few-shot (train) × 5 datasets ----
+    - name: metr_la_zero_shot
+      eval_only: true
+      epochs: 0
+      reset_data: true
+      data:
+        type: WindowDataModule
+        dataset_key: METR-LA
+        input_len: 96
+        output_len: 96
+        batch_size: 8
+        split: [0.7, 0.1, 0.2]
+        max_val_windows: 512
+        max_test_windows: 1024
+        scaler:
+          type: standard
+      load_from: dpm_xd_joint
+      strict_load: true
+      task:
+        type: StableResidualForecastingTask
+        phase: joint
+        model_mode: forecast
+      losses:
+        - type: mae
+      metrics:
+        - type: mae
+        - type: rmse
+
+    - name: metr_la_five_percent_mechanism_tuning
+      epochs: 3
+      reset_data: true
+      data:
+        type: WindowDataModule
+        dataset_key: METR-LA
+        input_len: 96
+        output_len: 96
+        batch_size: 8
+        split: [0.7, 0.1, 0.2]
+        max_val_windows: 512
+        max_test_windows: 1024
+        scaler:
+          type: standard
+      load_from: dpm_xd_joint
+      strict_load: true
+      few_shot_ratio: 0.05
+      freeze:
+        - all
+      unfreeze:
+        - residual_event_encoder.*
+        - diffusion_mechanism_learner.*
+        - fusion_predictor.*
+        - calibration_head.*
+        - stable_trunk.forecast_head.*
+      task:
+        type: StableResidualForecastingTask
+        phase: joint
+        model_mode: forecast
+        stable_target: lowfreq
+        final_weight: 1.0
+        stable_weight: 0.2
+        residual_weight: 0.2
+        spectral_weight: 0.02
+        cross_cov_weight: 0.0
+      losses:
+        - type: mae
+          weight: 1.0
+        - type: mse
+          weight: 0.05
+      metrics:
+        - type: mae
+        - type: rmse
+      optimizer:
+        type: AdamW
+        lr: 0.0005
+        weight_decay: 0.0001
+      scheduler:
+        type: CosineAnnealingLR
+        T_max: 3
+      validate_every: 1
+      gradient_clip_val: 5.0
+
+    - name: pems04_zero_shot
+      eval_only: true
+      epochs: 0
+      reset_data: true
+      data:
+        type: WindowDataModule
+        dataset_key: PEMS04
+        input_len: 96
+        output_len: 96
+        batch_size: 8
+        split: [0.7, 0.1, 0.2]
+        max_val_windows: 512
+        max_test_windows: 1024
+        scaler:
+          type: standard
+      load_from: dpm_xd_joint
+      strict_load: true
+      task:
+        type: StableResidualForecastingTask
+        phase: joint
+        model_mode: forecast
+      losses:
+        - type: mae
+      metrics:
+        - type: mae
+        - type: rmse
+
+    - name: pems04_five_percent_mechanism_tuning
+      epochs: 3
+      reset_data: true
+      data:
+        type: WindowDataModule
+        dataset_key: PEMS04
+        input_len: 96
+        output_len: 96
+        batch_size: 8
+        split: [0.7, 0.1, 0.2]
+        max_val_windows: 512
+        max_test_windows: 1024
+        scaler:
+          type: standard
+      load_from: dpm_xd_joint
+      strict_load: true
+      few_shot_ratio: 0.05
+      freeze:
+        - all
+      unfreeze:
+        - residual_event_encoder.*
+        - diffusion_mechanism_learner.*
+        - fusion_predictor.*
+        - calibration_head.*
+        - stable_trunk.forecast_head.*
+      task:
+        type: StableResidualForecastingTask
+        phase: joint
+        model_mode: forecast
+        stable_target: lowfreq
+        final_weight: 1.0
+        stable_weight: 0.2
+        residual_weight: 0.2
+        spectral_weight: 0.02
+        cross_cov_weight: 0.0
+      losses:
+        - type: mae
+          weight: 1.0
+        - type: mse
+          weight: 0.05
+      metrics:
+        - type: mae
+        - type: rmse
+      optimizer:
+        type: AdamW
+        lr: 0.0005
+        weight_decay: 0.0001
+      scheduler:
+        type: CosineAnnealingLR
+        T_max: 3
+      validate_every: 1
+      gradient_clip_val: 5.0
+
+    - name: pems07_zero_shot
+      eval_only: true
+      epochs: 0
+      reset_data: true
+      data:
+        type: WindowDataModule
+        dataset_key: PEMS07
+        input_len: 96
+        output_len: 96
+        batch_size: 8
+        split: [0.7, 0.1, 0.2]
+        max_val_windows: 512
+        max_test_windows: 1024
+        scaler:
+          type: standard
+      load_from: dpm_xd_joint
+      strict_load: true
+      task:
+        type: StableResidualForecastingTask
+        phase: joint
+        model_mode: forecast
+      losses:
+        - type: mae
+      metrics:
+        - type: mae
+        - type: rmse
+
+    - name: pems07_five_percent_mechanism_tuning
+      epochs: 3
+      reset_data: true
+      data:
+        type: WindowDataModule
+        dataset_key: PEMS07
+        input_len: 96
+        output_len: 96
+        batch_size: 8
+        split: [0.7, 0.1, 0.2]
+        max_val_windows: 512
+        max_test_windows: 1024
+        scaler:
+          type: standard
+      load_from: dpm_xd_joint
+      strict_load: true
+      few_shot_ratio: 0.05
+      freeze:
+        - all
+      unfreeze:
+        - residual_event_encoder.*
+        - diffusion_mechanism_learner.*
+        - fusion_predictor.*
+        - calibration_head.*
+        - stable_trunk.forecast_head.*
+      task:
+        type: StableResidualForecastingTask
+        phase: joint
+        model_mode: forecast
+        stable_target: lowfreq
+        final_weight: 1.0
+        stable_weight: 0.2
+        residual_weight: 0.2
+        spectral_weight: 0.02
+        cross_cov_weight: 0.0
+      losses:
+        - type: mae
+          weight: 1.0
+        - type: mse
+          weight: 0.05
+      metrics:
+        - type: mae
+        - type: rmse
+      optimizer:
+        type: AdamW
+        lr: 0.0005
+        weight_decay: 0.0001
+      scheduler:
+        type: CosineAnnealingLR
+        T_max: 3
+      validate_every: 1
+      gradient_clip_val: 5.0
+
+    - name: pems08_zero_shot
+      eval_only: true
+      epochs: 0
+      reset_data: true
+      data:
+        type: WindowDataModule
+        dataset_key: PEMS08
+        input_len: 96
+        output_len: 96
+        batch_size: 8
+        split: [0.7, 0.1, 0.2]
+        max_val_windows: 512
+        max_test_windows: 1024
+        scaler:
+          type: standard
+      load_from: dpm_xd_joint
+      strict_load: true
+      task:
+        type: StableResidualForecastingTask
+        phase: joint
+        model_mode: forecast
+      losses:
+        - type: mae
+      metrics:
+        - type: mae
+        - type: rmse
+
+    - name: pems08_five_percent_mechanism_tuning
+      epochs: 3
+      reset_data: true
+      data:
+        type: WindowDataModule
+        dataset_key: PEMS08
+        input_len: 96
+        output_len: 96
+        batch_size: 8
+        split: [0.7, 0.1, 0.2]
+        max_val_windows: 512
+        max_test_windows: 1024
+        scaler:
+          type: standard
+      load_from: dpm_xd_joint
+      strict_load: true
+      few_shot_ratio: 0.05
+      freeze:
+        - all
+      unfreeze:
+        - residual_event_encoder.*
+        - diffusion_mechanism_learner.*
+        - fusion_predictor.*
+        - calibration_head.*
+        - stable_trunk.forecast_head.*
+      task:
+        type: StableResidualForecastingTask
+        phase: joint
+        model_mode: forecast
+        stable_target: lowfreq
+        final_weight: 1.0
+        stable_weight: 0.2
+        residual_weight: 0.2
+        spectral_weight: 0.02
+        cross_cov_weight: 0.0
+      losses:
+        - type: mae
+          weight: 1.0
+        - type: mse
+          weight: 0.05
+      metrics:
+        - type: mae
+        - type: rmse
+      optimizer:
+        type: AdamW
+        lr: 0.0005
+        weight_decay: 0.0001
+      scheduler:
+        type: CosineAnnealingLR
+        T_max: 3
+      validate_every: 1
+      gradient_clip_val: 5.0
+
+    - name: ettm2_zero_shot
+      eval_only: true
+      epochs: 0
+      reset_data: true
+      data:
+        type: WindowDataModule
+        dataset_key: ETTm2
+        input_len: 96
+        output_len: 96
+        batch_size: 8
+        split: [0.7, 0.1, 0.2]
+        max_val_windows: 512
+        max_test_windows: 1024
+        scaler:
+          type: standard
+      load_from: dpm_xd_joint
+      strict_load: true
+      task:
+        type: StableResidualForecastingTask
+        phase: joint
+        model_mode: forecast
+      losses:
+        - type: mae
+      metrics:
+        - type: mae
+        - type: rmse
+
+    - name: ettm2_five_percent_mechanism_tuning
+      epochs: 3
+      reset_data: true
+      data:
+        type: WindowDataModule
+        dataset_key: ETTm2
+        input_len: 96
+        output_len: 96
+        batch_size: 8
+        split: [0.7, 0.1, 0.2]
+        max_val_windows: 512
+        max_test_windows: 1024
+        scaler:
+          type: standard
+      load_from: dpm_xd_joint
+      strict_load: true
+      few_shot_ratio: 0.05
+      freeze:
+        - all
+      unfreeze:
+        - residual_event_encoder.*
+        - diffusion_mechanism_learner.*
+        - fusion_predictor.*
+        - calibration_head.*
+        - stable_trunk.forecast_head.*
+      task:
+        type: StableResidualForecastingTask
+        phase: joint
+        model_mode: forecast
+        stable_target: lowfreq
+        final_weight: 1.0
+        stable_weight: 0.2
+        residual_weight: 0.2
+        spectral_weight: 0.02
+        cross_cov_weight: 0.0
+      losses:
+        - type: mae
+          weight: 1.0
+        - type: mse
+          weight: 0.05
+      metrics:
+        - type: mae
+        - type: rmse
+      optimizer:
+        type: AdamW
+        lr: 0.0005
+        weight_decay: 0.0001
+      scheduler:
+        type: CosineAnnealingLR
+        T_max: 3
+      validate_every: 1
+      gradient_clip_val: 5.0
