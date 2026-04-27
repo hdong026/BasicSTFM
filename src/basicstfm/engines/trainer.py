@@ -34,6 +34,7 @@ from basicstfm.utils.distributed import (
     unwrap_model,
 )
 from basicstfm.utils.logging import get_logger
+from basicstfm.utils.results import infer_stage_regime
 from basicstfm.utils.seed import seed_everything
 
 
@@ -598,6 +599,9 @@ class MultiStageTrainer:
                 json.dumps(data_cfg, sort_keys=True),
             )
 
+        if self.datamodule is not None and hasattr(self.datamodule, "describe_eval_protocol"):
+            self._log_p0_eval_protocol_audit(stage)
+
         model_cfg = self._compose_stage_model_config(stage_index)
         if self.model is None or self._current_model_cfg != model_cfg:
             model = MODELS.build(model_cfg).to(self.device)
@@ -605,6 +609,37 @@ class MultiStageTrainer:
             self._current_model_cfg = deepcopy(model_cfg)
             self.logger.info("Model: %s", unwrap_model(self.model).__class__.__name__)
             self.logger.info("Resolved model config: %s", json.dumps(model_cfg, sort_keys=True))
+
+    def _log_p0_eval_protocol_audit(self, stage: StageSpec) -> None:
+        """Log target-stage window eval protocol (full vs capped val/test) for P0 audits."""
+        dm = self.datamodule
+        if dm is None or not hasattr(dm, "describe_eval_protocol"):
+            return
+        protocol = dm.describe_eval_protocol()
+        regime = infer_stage_regime(
+            {
+                "stage_name": stage.name,
+                "eval_only": stage.eval_only,
+                "train_fraction": stage.few_shot_ratio,
+            }
+        )
+        payload: Dict[str, Any] = {
+            "experiment_name": self.cfg.get("experiment_name"),
+            "stage_name": stage.name,
+            "eval_regime": regime,
+            **protocol,
+        }
+        self.logger.info("P0 eval protocol audit: %s", json.dumps(payload, sort_keys=True, ensure_ascii=False))
+        if self.dry_run:
+            return
+        audit_path = self.work_dir / "results" / "p0_eval_protocol_audit.jsonl"
+        audit_path.parent.mkdir(parents=True, exist_ok=True)
+        line = {
+            **payload,
+            "iso_time": datetime.now().astimezone().replace(microsecond=0).isoformat(),
+        }
+        with audit_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(line, ensure_ascii=False) + "\n")
 
     def _compose_stage_data_config(self, stage_index: int) -> Dict[str, Any]:
         return deepcopy(self._stage_data_recipes[stage_index])
@@ -815,6 +850,37 @@ class MultiStageTrainer:
         if save_artifact:
             self.artifacts[str(save_artifact)] = str(path)
         self.logger.info("Resume checkpoint selected: %s", path)
+        self._maybe_warn_resume_misuse()
+
+    def _maybe_warn_resume_misuse(self) -> None:
+        """If resume_from is a *late* or *last* stage checkpoint, explain skip behaviour."""
+        resume_i = self._resume_stage_index()
+        n = len(self.plan.stages)
+        if n <= 1 or resume_i is None:
+            return
+        first = self.plan.stages[0]
+        # Typical mistake: `latest.pt` from a *fully completed* run points at the *last* stage
+        # (highest stage_index), so the trainer skips every stage before that index.
+        if resume_i == n - 1:
+            self.logger.warning(
+                "resume_from 指向的断点元数据是 **最后一段** pipeline（stage_index=%d / %d）。"
+                "本训练器会据此 **跳过** 其之前的所有阶段，只从该段继续。若你的意图是"
+                "「预训练已做完、只想重新跑 **zero / few-shot**（或换 P0 全量 val/test 配置重评）」"
+                "请改用 **仅预训练结束** 时保存的权重，例如：\n"
+                "  %s\n"
+                "（其 save_artifact 与 target 的 load_from 一致），不要用全流程结束后的 `latest.pt`。",
+                resume_i,
+                n - 1,
+                f".../checkpoints/{first.name}_last.pt",
+            )
+        elif resume_i > 0 and first.save_artifact:
+            # Mid-pipeline: still easy to mis-read — log the first-stage pretrain name once.
+            self.logger.info(
+                "Resume stage_index is %d (not 0). Earlier stages in the plan are skipped. "
+                "Pretrain-completed file pattern for stage 0: checkpoints/%s_last.pt",
+                resume_i,
+                first.name,
+            )
 
     def _resume_stage_index(self) -> Optional[int]:
         if not self._resume_checkpoint:

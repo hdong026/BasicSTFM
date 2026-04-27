@@ -178,6 +178,14 @@ def pretty_model_name(row: Mapping[str, Any]) -> str:
         "opencity_cross_domain_sharded_transfer": "OpenCity (XD)",
         "factost_cross_domain_sharded_transfer": "FactoST (XD)",
         "unist_cross_domain_sharded_transfer": "UniST (XD)",
+        # P0 full-eval (target val/test uncapped) — sharded * _p0_full_eval.yaml
+        "dpm_v2_cross_domain_sharded_transfer_p0_full_eval": "DPM-v2 (XD, P0 full-eval)",
+        "dpm_v3_cross_domain_sharded_transfer_p0_full_eval": "DPM-v3 (XD, P0 full-eval)",
+        "dpm_stfm_cross_domain_sharded_transfer_p0_full_eval": "DPM-SR (XD, P0 full-eval)",
+        "dpm_stfm_v4_cross_domain_e2e_transfer_p0_full_eval": "DPM-SR v4 (XD, P0 full-eval)",
+        "opencity_cross_domain_sharded_transfer_p0_full_eval": "OpenCity (XD, P0 full-eval)",
+        "factost_cross_domain_sharded_transfer_p0_full_eval": "FactoST (XD, P0 full-eval)",
+        "unist_cross_domain_sharded_transfer_p0_full_eval": "UniST (XD, P0 full-eval)",
     }
     if experiment_name in experiment_mapping:
         return experiment_mapping[experiment_name]

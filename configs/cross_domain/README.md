@@ -5,8 +5,24 @@ KnowAir, Weather, ETTm1), **round_robin** training mixing, fixed **steps_per_epo
 **per_dataset** validation, and per-dataset **max_train_windows** caps in
 `dataset_registry` (see `MultiDatasetWindowDataModule` in `src/basicstfm/data/datamodule.py`).
 
-Horizon is **96 → 96** everywhere. Transfer target is **METR-LA** (zero-shot eval, then
-5% few-shot with method-specific heads/adapters).
+The paragraph above matches the **older `*_pretrain_transfer.yaml` recipes** in this
+folder (e.g. four sources, often documented as 96 → 96 and **METR-LA** as the transfer
+target in prose).
+
+**Protocol note (sharded transfer recipes):** Files such as
+`*_cross_domain_sharded_transfer.yaml` use **input / output length 12 → 12** on transfer
+stages, **split** `[0.7, 0.1, 0.2]`, and **five** downstream targets: **METR-LA**,
+**PEMS04**, **PEMS07**, **PEMS08**, and **ETTm2** (each with zero-shot eval and 5%
+few-shot). By default, those target `WindowDataModule` blocks set
+`max_val_windows` / `max_test_windows` to speed up dev runs (subset **val/test**
+windows after the time split). For **full** val/test on the 0.1 / 0.2 time splits, use
+the **P0** audit copies `*_cross_domain_sharded_transfer_p0_full_eval.yaml` (and
+`dpm_stfm_v4_cross_domain_e2e_transfer_p0_full_eval.yaml` for the e2e v4 line), one per
+family: **OpenCity**, **FactoST**, **UniST**, **DPM v2 / v3 / DPM-SR**, plus v4 e2e.
+There is also `dpm_v3_cross_domain_sharded_transfer_p0_sanity.yaml` (PEMS04 + METR-LA
+only). See comments in each file and `results/p0_eval_protocol_audit.jsonl` from the
+trainer for per-stage window counts. Pretrain blocks are unchanged vs the matching
+non-P0 recipe; only target stages drop the val/test caps.
 
 ---
 

@@ -336,6 +336,43 @@ class WindowDataModule:
         self.datasets: Dict[str, Dataset] = {}
         self.data_shape: Optional[Tuple[int, int, int]] = None
 
+    def describe_eval_protocol(self) -> Dict[str, Any]:
+        """After :meth:`setup`, report window counts and val/test caps (P0 eval audit).
+
+        When ``max_val_windows`` / ``max_test_windows`` are ``None`` (or omitted in YAML),
+        the corresponding val/test DataLoaders use the **full** split (no cap).
+        """
+        key = "unknown"
+        try:
+            key = str(Path(self.data_path).parent.name)
+        except Exception:
+            key = "unknown"
+        if not self.datasets:
+            return {
+                "status": "not_setup",
+                "dataset_key": key,
+                "data_path": self.data_path,
+                "input_len": self.input_len,
+                "target_len": self.target_len,
+            }
+        n_train = len(self.datasets.get("train", []))
+        n_val = len(self.datasets.get("val", []))
+        n_test = len(self.datasets.get("test", []))
+        return {
+            "status": "ok",
+            "datamodule": "WindowDataModule",
+            "dataset_key": key,
+            "data_path": self.data_path,
+            "input_len": self.input_len,
+            "output_len": self.target_len,
+            "split": list(self.split) if self.split is not None else None,
+            "max_val_windows": self.max_val_windows,
+            "max_test_windows": self.max_test_windows,
+            "max_val_windows_capped": self.max_val_windows is not None,
+            "max_test_windows_capped": self.max_test_windows is not None,
+            "num_windows": {"train": n_train, "val": n_val, "test": n_test},
+        }
+
     def setup(self) -> None:
         array = _load_numpy(self.data_path, self.input_key, mmap_mode=self.mmap_mode)
         if array.ndim == 2:
