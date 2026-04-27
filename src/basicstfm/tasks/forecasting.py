@@ -34,6 +34,7 @@ class ForecastingTask(Task):
         target = batch[self.target_key]
         outputs = model(x, graph=batch.get("graph"), mode=self.model_mode)
         pred_scaled = outputs[self.output_key] if isinstance(outputs, dict) else outputs
+        pred_scaled = self.slice_prediction_to_data_channels(pred_scaled, x)
         pred = self.inverse_transform(pred_scaled, batch=batch)
         mask = self.merge_masks(
             batch.get("y_mask"),

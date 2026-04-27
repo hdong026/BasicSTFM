@@ -86,6 +86,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         "UniST (XD)",
         "DPM-STFM",
         "DPM-SR (XD)",
+        "DPM-SR v4 (XD E2E)",
         "DPM-v2 (XD)",
         "DPM-v3 (XD)",
         "DPM-Scratch",

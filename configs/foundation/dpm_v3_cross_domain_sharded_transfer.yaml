@@ -80,8 +80,8 @@ dataset_groups:
 data:
   type: WindowDataModule
   dataset_key: METR-LA
-  input_len: 96
-  output_len: 96
+  input_len: 12
+  output_len: 12
   batch_size: 8
   split: [0.7, 0.1, 0.2]
   scaler:
@@ -118,8 +118,8 @@ pipeline:
       data:
         type: MultiDatasetWindowDataModule
         dataset_group: cross_domain_sharded_sources
-        input_len: 96
-        output_len: 96
+        input_len: 12
+        output_len: 12
         num_workers: 2
         train_strategy: round_robin
         eval_strategy: per_dataset
@@ -178,8 +178,8 @@ pipeline:
       data:
         type: MultiDatasetWindowDataModule
         dataset_group: cross_domain_sharded_sources
-        input_len: 96
-        output_len: 96
+        input_len: 12
+        output_len: 12
         num_workers: 2
         train_strategy: round_robin
         eval_strategy: per_dataset
@@ -231,8 +231,8 @@ pipeline:
       data:
         type: MultiDatasetWindowDataModule
         dataset_group: cross_domain_sharded_sources
-        input_len: 96
-        output_len: 96
+        input_len: 12
+        output_len: 12
         num_workers: 2
         train_strategy: round_robin
         eval_strategy: per_dataset
@@ -279,8 +279,8 @@ pipeline:
       data:
         type: WindowDataModule
         dataset_key: METR-LA
-        input_len: 96
-        output_len: 96
+        input_len: 12
+        output_len: 12
         batch_size: 8
         split: [0.7, 0.1, 0.2]
         max_val_windows: 512
@@ -305,8 +305,8 @@ pipeline:
       data:
         type: WindowDataModule
         dataset_key: METR-LA
-        input_len: 96
-        output_len: 96
+        input_len: 12
+        output_len: 12
         batch_size: 8
         split: [0.7, 0.1, 0.2]
         max_val_windows: 512
@@ -359,8 +359,8 @@ pipeline:
       data:
         type: WindowDataModule
         dataset_key: PEMS04
-        input_len: 96
-        output_len: 96
+        input_len: 12
+        output_len: 12
         batch_size: 8
         split: [0.7, 0.1, 0.2]
         max_val_windows: 512
@@ -385,8 +385,8 @@ pipeline:
       data:
         type: WindowDataModule
         dataset_key: PEMS04
-        input_len: 96
-        output_len: 96
+        input_len: 12
+        output_len: 12
         batch_size: 8
         split: [0.7, 0.1, 0.2]
         max_val_windows: 512
@@ -439,8 +439,8 @@ pipeline:
       data:
         type: WindowDataModule
         dataset_key: PEMS07
-        input_len: 96
-        output_len: 96
+        input_len: 12
+        output_len: 12
         batch_size: 8
         split: [0.7, 0.1, 0.2]
         max_val_windows: 512
@@ -465,8 +465,8 @@ pipeline:
       data:
         type: WindowDataModule
         dataset_key: PEMS07
-        input_len: 96
-        output_len: 96
+        input_len: 12
+        output_len: 12
         batch_size: 8
         split: [0.7, 0.1, 0.2]
         max_val_windows: 512
@@ -519,8 +519,8 @@ pipeline:
       data:
         type: WindowDataModule
         dataset_key: PEMS08
-        input_len: 96
-        output_len: 96
+        input_len: 12
+        output_len: 12
         batch_size: 8
         split: [0.7, 0.1, 0.2]
         max_val_windows: 512
@@ -545,8 +545,8 @@ pipeline:
       data:
         type: WindowDataModule
         dataset_key: PEMS08
-        input_len: 96
-        output_len: 96
+        input_len: 12
+        output_len: 12
         batch_size: 8
         split: [0.7, 0.1, 0.2]
         max_val_windows: 512
@@ -599,8 +599,8 @@ pipeline:
       data:
         type: WindowDataModule
         dataset_key: ETTm2
-        input_len: 96
-        output_len: 96
+        input_len: 12
+        output_len: 12
         batch_size: 8
         split: [0.7, 0.1, 0.2]
         max_val_windows: 512
@@ -625,8 +625,8 @@ pipeline:
       data:
         type: WindowDataModule
         dataset_key: ETTm2
-        input_len: 96
-        output_len: 96
+        input_len: 12
+        output_len: 12
         batch_size: 8
         split: [0.7, 0.1, 0.2]
         max_val_windows: 512

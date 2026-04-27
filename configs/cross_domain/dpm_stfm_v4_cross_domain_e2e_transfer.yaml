@@ -1,13 +1,15 @@
-# FactoST — UTP on 5 sharded sources (10 epochs × 10000 steps/epoch) + 5 targets.
-# Build shards: python scripts/data/build_largest_cross_domain_shards.py --num-shards 2 --target-nodes 256
-# Split [0.7,0.1,0.2]; pretrain val/test cap 256/512; target val/test 512/1024.
-experiment_name: factost_cross_domain_sharded_transfer
+# DPM / SRD-STFM (SRDSTFMBackbone) v4 — 端到端联合预训练 (10 epochs × 10000 steps) + 5 targets。
+# 与 dpm_stfm_cross_domain_sharded_transfer 的模型/数据配方一致，但不再分 stable → diffusion → joint
+# 三阶段，而是与 OpenCity / UniST / FactoST 等 baseline 相同：单阶段 10 epoch 全参数联合训练。
+# Prerequisites:  python scripts/data/build_largest_cross_domain_shards.py --num-shards 2 --target-nodes 256
+
+experiment_name: dpm_stfm_v4_cross_domain_e2e_transfer
 seed: 42
 
 trainer:
   type: MultiStageTrainer
   device: auto
-  work_dir: runs/factost_cross_domain_sharded_transfer
+  work_dir: runs/dpm_stfm_v4_cross_domain_e2e_transfer
   log_every: 50
 
 dataset_registry:
@@ -81,24 +83,26 @@ data:
     type: standard
 
 model:
-  type: FactoSTFoundationModel
+  type: SRDSTFMBackbone
   num_nodes: auto
   input_dim: auto
   output_dim: auto
   input_len: auto
   output_len: auto
-  patch_len: 12
   hidden_dim: 128
-  num_layers: 3
-  num_heads: 8
-  ffn_dim: 256
-  num_prompt_tokens: 3
-  use_st_adapter: true
+  residual_mode: forecast
+  fusion_mode: additive
+  use_frequency_branch: true
+  num_datasets: 5
+  diffusion_enabled: true
+  use_inertia_gate: true
+  use_attenuation_gate: true
 
 pipeline:
   stages:
-    - name: factost_sharded_universal_temporal_pretrain
-      save_artifact: factost_xd_sharded_utp
+    # 单阶段端到端：与 opencity_cross_domain_sharded_transfer 的预训练 epoch 数一致 (10 × 10000 steps)
+    - name: dpm_stfm_v4_cross_domain_e2e_pretrain
+      save_artifact: srd_xd_v4_e2e
       reset_data: true
       data:
         type: MultiDatasetWindowDataModule
@@ -115,21 +119,24 @@ pipeline:
         scaler:
           type: standard
       epochs: 10
-      model:
-        use_st_adapter: false
       task:
-        type: JointReconstructionForecastTask
-        mask_ratio: 0.5
-        mask_strategy: random
-        reconstruction_weight: 1.0
-        forecast_weight: 1.0
-        reconstruction_spectral_weight: 0.1
-        forecast_spectral_weight: 0.1
-        spectral_scales: [1, 2, 4]
+        type: StableResidualForecastingTask
+        phase: joint
+        model_mode: forecast
+        stable_target: lowfreq
+        final_weight: 1.0
+        stable_weight: 0.2
+        residual_weight: 0.2
+        spectral_weight: 0.02
+        spectral_scales: [1]
       losses:
+        - type: mae
+          weight: 1.0
         - type: mse
+          weight: 0.05
       metrics:
         - type: mae
+        - type: rmse
       optimizer:
         type: AdamW
         lr: 0.001
@@ -140,6 +147,7 @@ pipeline:
       validate_every: 1
       gradient_clip_val: 5.0
 
+    # ---- Targets: zero-shot (eval) + 5% few-shot (train) × 5 datasets（与 dpm_stfm sharded 相同，仅改 load_from）----
     - name: metr_la_zero_shot
       eval_only: true
       epochs: 0
@@ -155,22 +163,19 @@ pipeline:
         max_test_windows: 1024
         scaler:
           type: standard
-
-      load_from: factost_xd_sharded_utp
+      load_from: srd_xd_v4_e2e
       strict_load: true
-      model:
-        use_st_adapter: false
-        output_dim: 1
       task:
-        type: ForecastingTask
-        model_mode: zero_shot
+        type: StableResidualForecastingTask
+        phase: joint
+        model_mode: forecast
       losses:
         - type: mae
       metrics:
         - type: mae
         - type: rmse
 
-    - name: metr_la_five_percent_factorized_adapter
+    - name: metr_la_five_percent_mechanism_tuning
       epochs: 3
       reset_data: true
       data:
@@ -184,22 +189,27 @@ pipeline:
         max_test_windows: 1024
         scaler:
           type: standard
-
-      load_from: factost_xd_sharded_utp
-      load_method: load_backbone_weights
-      strict_load: false
-      model:
-        use_st_adapter: true
+      load_from: srd_xd_v4_e2e
+      strict_load: true
       few_shot_ratio: 0.05
       freeze:
         - all
       unfreeze:
-        - prompt_*
-        - st_*
-        - metadata_gate.*
-        - forecast_head.*
+        - residual_event_encoder.*
+        - diffusion_mechanism_learner.*
+        - fusion_predictor.*
+        - calibration_head.*
+        - stable_trunk.forecast_head.*
       task:
-        type: ForecastingTask
+        type: StableResidualForecastingTask
+        phase: joint
+        model_mode: forecast
+        stable_target: lowfreq
+        final_weight: 1.0
+        stable_weight: 0.2
+        residual_weight: 0.2
+        spectral_weight: 0.02
+        cross_cov_weight: 0.0
       losses:
         - type: mae
           weight: 1.0
@@ -233,22 +243,19 @@ pipeline:
         max_test_windows: 1024
         scaler:
           type: standard
-
-      load_from: factost_xd_sharded_utp
+      load_from: srd_xd_v4_e2e
       strict_load: true
-      model:
-        use_st_adapter: false
-        output_dim: 1
       task:
-        type: ForecastingTask
-        model_mode: zero_shot
+        type: StableResidualForecastingTask
+        phase: joint
+        model_mode: forecast
       losses:
         - type: mae
       metrics:
         - type: mae
         - type: rmse
 
-    - name: pems04_five_percent_factorized_adapter
+    - name: pems04_five_percent_mechanism_tuning
       epochs: 3
       reset_data: true
       data:
@@ -262,22 +269,27 @@ pipeline:
         max_test_windows: 1024
         scaler:
           type: standard
-
-      load_from: factost_xd_sharded_utp
-      load_method: load_backbone_weights
-      strict_load: false
-      model:
-        use_st_adapter: true
+      load_from: srd_xd_v4_e2e
+      strict_load: true
       few_shot_ratio: 0.05
       freeze:
         - all
       unfreeze:
-        - prompt_*
-        - st_*
-        - metadata_gate.*
-        - forecast_head.*
+        - residual_event_encoder.*
+        - diffusion_mechanism_learner.*
+        - fusion_predictor.*
+        - calibration_head.*
+        - stable_trunk.forecast_head.*
       task:
-        type: ForecastingTask
+        type: StableResidualForecastingTask
+        phase: joint
+        model_mode: forecast
+        stable_target: lowfreq
+        final_weight: 1.0
+        stable_weight: 0.2
+        residual_weight: 0.2
+        spectral_weight: 0.02
+        cross_cov_weight: 0.0
       losses:
         - type: mae
           weight: 1.0
@@ -311,22 +323,19 @@ pipeline:
         max_test_windows: 1024
         scaler:
           type: standard
-
-      load_from: factost_xd_sharded_utp
+      load_from: srd_xd_v4_e2e
       strict_load: true
-      model:
-        use_st_adapter: false
-        output_dim: 1
       task:
-        type: ForecastingTask
-        model_mode: zero_shot
+        type: StableResidualForecastingTask
+        phase: joint
+        model_mode: forecast
       losses:
         - type: mae
       metrics:
         - type: mae
         - type: rmse
 
-    - name: pems07_five_percent_factorized_adapter
+    - name: pems07_five_percent_mechanism_tuning
       epochs: 3
       reset_data: true
       data:
@@ -340,22 +349,27 @@ pipeline:
         max_test_windows: 1024
         scaler:
           type: standard
-
-      load_from: factost_xd_sharded_utp
-      load_method: load_backbone_weights
-      strict_load: false
-      model:
-        use_st_adapter: true
+      load_from: srd_xd_v4_e2e
+      strict_load: true
       few_shot_ratio: 0.05
       freeze:
         - all
       unfreeze:
-        - prompt_*
-        - st_*
-        - metadata_gate.*
-        - forecast_head.*
+        - residual_event_encoder.*
+        - diffusion_mechanism_learner.*
+        - fusion_predictor.*
+        - calibration_head.*
+        - stable_trunk.forecast_head.*
       task:
-        type: ForecastingTask
+        type: StableResidualForecastingTask
+        phase: joint
+        model_mode: forecast
+        stable_target: lowfreq
+        final_weight: 1.0
+        stable_weight: 0.2
+        residual_weight: 0.2
+        spectral_weight: 0.02
+        cross_cov_weight: 0.0
       losses:
         - type: mae
           weight: 1.0
@@ -389,22 +403,19 @@ pipeline:
         max_test_windows: 1024
         scaler:
           type: standard
-
-      load_from: factost_xd_sharded_utp
+      load_from: srd_xd_v4_e2e
       strict_load: true
-      model:
-        use_st_adapter: false
-        output_dim: 1
       task:
-        type: ForecastingTask
-        model_mode: zero_shot
+        type: StableResidualForecastingTask
+        phase: joint
+        model_mode: forecast
       losses:
         - type: mae
       metrics:
         - type: mae
         - type: rmse
 
-    - name: pems08_five_percent_factorized_adapter
+    - name: pems08_five_percent_mechanism_tuning
       epochs: 3
       reset_data: true
       data:
@@ -418,22 +429,27 @@ pipeline:
         max_test_windows: 1024
         scaler:
           type: standard
-
-      load_from: factost_xd_sharded_utp
-      load_method: load_backbone_weights
-      strict_load: false
-      model:
-        use_st_adapter: true
+      load_from: srd_xd_v4_e2e
+      strict_load: true
       few_shot_ratio: 0.05
       freeze:
         - all
       unfreeze:
-        - prompt_*
-        - st_*
-        - metadata_gate.*
-        - forecast_head.*
+        - residual_event_encoder.*
+        - diffusion_mechanism_learner.*
+        - fusion_predictor.*
+        - calibration_head.*
+        - stable_trunk.forecast_head.*
       task:
-        type: ForecastingTask
+        type: StableResidualForecastingTask
+        phase: joint
+        model_mode: forecast
+        stable_target: lowfreq
+        final_weight: 1.0
+        stable_weight: 0.2
+        residual_weight: 0.2
+        spectral_weight: 0.02
+        cross_cov_weight: 0.0
       losses:
         - type: mae
           weight: 1.0
@@ -467,22 +483,19 @@ pipeline:
         max_test_windows: 1024
         scaler:
           type: standard
-
-      load_from: factost_xd_sharded_utp
+      load_from: srd_xd_v4_e2e
       strict_load: true
-      model:
-        use_st_adapter: false
-        output_dim: 1
       task:
-        type: ForecastingTask
-        model_mode: zero_shot
+        type: StableResidualForecastingTask
+        phase: joint
+        model_mode: forecast
       losses:
         - type: mae
       metrics:
         - type: mae
         - type: rmse
 
-    - name: ettm2_five_percent_factorized_adapter
+    - name: ettm2_five_percent_mechanism_tuning
       epochs: 3
       reset_data: true
       data:
@@ -496,22 +509,27 @@ pipeline:
         max_test_windows: 1024
         scaler:
           type: standard
-
-      load_from: factost_xd_sharded_utp
-      load_method: load_backbone_weights
-      strict_load: false
-      model:
-        use_st_adapter: true
+      load_from: srd_xd_v4_e2e
+      strict_load: true
       few_shot_ratio: 0.05
       freeze:
         - all
       unfreeze:
-        - prompt_*
-        - st_*
-        - metadata_gate.*
-        - forecast_head.*
+        - residual_event_encoder.*
+        - diffusion_mechanism_learner.*
+        - fusion_predictor.*
+        - calibration_head.*
+        - stable_trunk.forecast_head.*
       task:
-        type: ForecastingTask
+        type: StableResidualForecastingTask
+        phase: joint
+        model_mode: forecast
+        stable_target: lowfreq
+        final_weight: 1.0
+        stable_weight: 0.2
+        residual_weight: 0.2
+        spectral_weight: 0.02
+        cross_cov_weight: 0.0
       losses:
         - type: mae
           weight: 1.0

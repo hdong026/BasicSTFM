@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
-from typing import Optional, Sequence, Tuple
+from typing import Any, Optional, Sequence, Tuple
 
 import torch
 from torch import nn
 from torch.nn import functional as F
 
-from basicstfm.utils.checkpoint import torch_load
+from basicstfm.utils.checkpoint import adapt_checkpoint_state_dict, torch_load
 
 
 def ensure_4d(x: torch.Tensor) -> torch.Tensor:
@@ -190,6 +190,8 @@ def load_weights(
             if candidate in state:
                 state = state[candidate]
                 break
+    if isinstance(state, dict):
+        state = adapt_checkpoint_state_dict(module, state)
     missing, unexpected = module.load_state_dict(state, strict=strict)
     return list(missing), list(unexpected)
 
@@ -213,7 +215,12 @@ def load_filtered_weights(
         if exclude_prefixes and any(name.startswith(prefix) for prefix in exclude_prefixes):
             continue
         filtered[name] = value
-    missing, unexpected = module.load_state_dict(filtered, strict=strict)
+    # Partial load: only keys in ``filtered`` are taken from the checkpoint; the rest stay as
+    # on the module. Then adapt (node_emb / channel_emb expansion when target graph is larger).
+    model_sd = module.state_dict()
+    overlay = {k: filtered[k] for k in filtered if k in model_sd}
+    merged = adapt_checkpoint_state_dict(module, overlay)
+    missing, unexpected = module.load_state_dict(merged, strict=strict)
     return list(missing), list(unexpected)
 
 
@@ -235,4 +242,19 @@ def _read_state_dict(
                 break
     if not isinstance(state, dict):
         raise TypeError(f"Checkpoint at {path!r} does not contain a state dict")
-    return state
+    return _strip_ddp_module_prefix(state)
+
+
+def _strip_ddp_module_prefix(state: dict[str, Any]) -> dict[str, Any]:
+    """Map ``module.``-prefixed keys (DataParallel/DDP exports) to plain parameter names."""
+
+    if not any(str(k).startswith("module.") for k in state):
+        return state
+    out: dict[str, Any] = {}
+    for key, value in state.items():
+        s = str(key)
+        if s.startswith("module."):
+            out[s[7:]] = value
+        else:
+            out[s] = value
+    return out

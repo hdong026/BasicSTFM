@@ -50,6 +50,7 @@ class MaskedReconstructionTask(Task):
         masked_x = x.masked_fill(mask, self.mask_value)
         outputs = model(masked_x, graph=batch.get("graph"), mask=mask, mode=self.model_mode)
         pred_scaled = outputs[self.output_key] if isinstance(outputs, dict) else outputs
+        pred_scaled = self.slice_prediction_to_data_channels(pred_scaled, x)
         pred = self.inverse_transform(pred_scaled, batch=batch)
         target, mask = self.align_prediction_target(pred, raw_x, mask)
         loss_out = losses(pred, target, mask=mask)

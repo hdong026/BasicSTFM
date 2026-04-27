@@ -78,6 +78,26 @@ class Task(ABC):
         mask = torch.cat([mask, mask_pad], dim=-1)
         return target, mask
 
+    @staticmethod
+    def slice_prediction_to_data_channels(
+        pred: torch.Tensor,
+        data_ref: torch.Tensor,
+    ) -> torch.Tensor:
+        """Match last-dim (channels) to the dataset before ``inverse_transform``.
+
+        Same idea as ``StableResidualForecastingTask._align_pred_target`` in *scaled* space:
+        a backbone trained on a max width (e.g. 18) may be evaluated on fewer channels (e.g. 3);
+        the scaler mean/std only cover the data channels, so trim or pad *pred* to ``data_ref``'s width.
+        """
+
+        c = data_ref.shape[-1]
+        if pred.shape[-1] == c:
+            return pred
+        if pred.shape[-1] > c:
+            return pred[..., :c]
+        pad = pred.new_zeros(*pred.shape[:-1], c - pred.shape[-1])
+        return torch.cat([pred, pad], dim=-1)
+
     @abstractmethod
     def step(self, model: torch.nn.Module, batch: Dict[str, Any], losses, device: torch.device):
         raise NotImplementedError

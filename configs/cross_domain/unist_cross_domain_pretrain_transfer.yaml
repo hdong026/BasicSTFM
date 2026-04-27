@@ -1,7 +1,7 @@
 # UniST — masked reconstruction pretrain (no prompt in stage 1), then METR-LA
 # mask-completion transfer with prompt, and 5% few-shot prompt+head tuning.
 # Backbone weights load is partial; strict_load is false for schedule compatibility.
-# window length 96/96; round_robin and per-dataset max_train_windows match other lines.
+# window length 12/12; round_robin and per-dataset max_train_windows match other lines.
 
 experiment_name: unist_cross_domain_pretrain_transfer
 seed: 42
@@ -61,8 +61,8 @@ dataset_groups:
 data:
   type: WindowDataModule
   dataset_key: METR-LA
-  input_len: 96
-  output_len: 96
+  input_len: 12
+  output_len: 12
   batch_size: 16
   split: [0.7, 0.1, 0.2]
   scaler:
@@ -92,8 +92,8 @@ pipeline:
       data:
         type: MultiDatasetWindowDataModule
         dataset_group: cross_domain_sources
-        input_len: 96
-        output_len: 96
+        input_len: 12
+        output_len: 12
         num_workers: 2
         train_strategy: round_robin
         eval_strategy: per_dataset
@@ -130,8 +130,8 @@ pipeline:
       data:
         type: WindowDataModule
         dataset_key: METR-LA
-        input_len: 96
-        output_len: 96
+        input_len: 12
+        output_len: 12
         batch_size: 16
         split: [0.7, 0.1, 0.2]
         scaler:
@@ -155,8 +155,8 @@ pipeline:
       data:
         type: WindowDataModule
         dataset_key: METR-LA
-        input_len: 96
-        output_len: 96
+        input_len: 12
+        output_len: 12
         batch_size: 16
         split: [0.7, 0.1, 0.2]
         scaler:

@@ -170,6 +170,14 @@ def pretty_model_name(row: Mapping[str, Any]) -> str:
         "opencity_cross_domain_pretrain_transfer": "OpenCity (XD)",
         "factost_cross_domain_pretrain_transfer": "FactoST (XD)",
         "unist_cross_domain_pretrain_transfer": "UniST (XD)",
+        # Sharded cross-domain transfer (configs/cross_domain/*_sharded_transfer.yaml)
+        "dpm_v2_cross_domain_sharded_transfer": "DPM-v2 (XD)",
+        "dpm_v3_cross_domain_sharded_transfer": "DPM-v3 (XD)",
+        "dpm_stfm_cross_domain_sharded_transfer": "DPM-SR (XD)",
+        "dpm_stfm_v4_cross_domain_e2e_transfer": "DPM-SR v4 (XD E2E)",
+        "opencity_cross_domain_sharded_transfer": "OpenCity (XD)",
+        "factost_cross_domain_sharded_transfer": "FactoST (XD)",
+        "unist_cross_domain_sharded_transfer": "UniST (XD)",
     }
     if experiment_name in experiment_mapping:
         return experiment_mapping[experiment_name]

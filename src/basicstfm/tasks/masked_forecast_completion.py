@@ -58,6 +58,7 @@ class MaskedForecastCompletionTask(Task):
             mode=self.model_mode,
         )
         pred_full = outputs[self.output_key] if isinstance(outputs, dict) else outputs
+        pred_full = self.slice_prediction_to_data_channels(pred_full, scaled_sequence)
         pred_full = self.inverse_transform(pred_full, batch=batch)
         pred = pred_full[:, -future.shape[1] :]
         future_mask = self.merge_masks(mask[:, -future.shape[1] :], batch.get("y_mask"))
