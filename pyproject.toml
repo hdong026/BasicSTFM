@@ -24,6 +24,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+hf = ["datasets>=3.5", "tqdm>=4.66"]
 dev = [
   "pytest>=7.4",
   "ruff>=0.4"

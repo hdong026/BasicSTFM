@@ -90,6 +90,45 @@ class StableResidualForecastingTaskV3Test(unittest.TestCase):
         out = task.step(model, batch, losses, torch.device("cpu"))
         self.assertIn("loss", out)
 
+    def test_v5_robust_stage1_with_srdstfm(self):
+        """DPM-v5 task on SRDSTFM backbone (robust Stage-I path)."""
+        import_builtin_components()
+        model = MODELS.build(
+            {
+                "type": "SRDSTFMBackbone",
+                "num_nodes": 4,
+                "input_dim": 1,
+                "output_dim": 1,
+                "input_len": 8,
+                "output_len": 4,
+                "hidden_dim": 16,
+                "num_datasets": 2,
+            }
+        )
+        task = TASKS.build(
+            {
+                "type": "StableResidualForecastingTaskV5",
+                "phase": "stable",
+                "model_mode": "stable_pretrain",
+                "robust_stage1": True,
+                "robust_lambda": 0.5,
+                "robust_temperature": 1.0,
+                "robust_ema_momentum": 0.0,
+                "robust_use_standardized_risk": True,
+                "robust_group_key": "dataset",
+            }
+        )
+        losses = LossCollection([{"type": "mae"}])
+        b = 4
+        batch = {
+            "x": torch.randn(b, 8, 4, 1),
+            "y": torch.randn(b, 4, 4, 1),
+            "graph": torch.eye(4),
+            "dataset_index": torch.zeros(b, dtype=torch.long),
+        }
+        out = task.step(model, batch, losses, torch.device("cpu"))
+        self.assertTrue(torch.isfinite(out["loss"]))
+
 
 if __name__ == "__main__":
     unittest.main()

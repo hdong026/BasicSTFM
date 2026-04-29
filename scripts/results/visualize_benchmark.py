@@ -89,6 +89,9 @@ def main(argv: Sequence[str] | None = None) -> None:
         "DPM-SR v4 (XD E2E)",
         "DPM-v2 (XD)",
         "DPM-v3 (XD)",
+        "DPM-v5 (XD)",
+        "DPM-v5 (XD, P0 full-eval)",
+        "DPM-v5 rob0 (XD, P0 full-eval)",
         "DPM-Scratch",
         "DPM-StableOnly",
         "DPM-NoDiffusion",
@@ -197,15 +200,34 @@ def write_csv(path: Path, rows: Sequence[Dict[str, object]]) -> None:
             writer.writerow(row)
 
 
-# Publication-style, colorblind-friendly palette (inspired by Okabe–Ito / Nature guidelines).
-# Every known `pretty_model_name` gets a key so we never fall back to index 3 == DPM purple.
+# Publication-style, colorblind-friendly palette. Cross-domain (XD) lines need **explicit** keys
+# so they do not all collide in _EXTRA via hash. Okabe–Ito + Paul Tol–style well-separated hues.
+# P0 / non-P0: same color per model family; rob0 is a clearly different (lighter) variant of v5.
 _MODEL_COLORS: Dict[str, str] = {
     "OpenCity": "#0072B2",
     "OpenCity-LargeST": "#0072B2",
     "OpenCity-LargeST-1Ch": "#0072B2",
-    "FactoST": "#D55E00",
+    # Cross-domain: one explicit fill per line (hue separation > matching legacy STFM pinks)
+    "OpenCity (XD)": "#0072B2",
+    "OpenCity (XD, P0 full-eval)": "#0072B2",
+    "FactoST": "#E69F00",
+    "FactoST (XD)": "#E69F00",
+    "FactoST (XD, P0 full-eval)": "#E69F00",
     "UniST": "#009E73",
+    "UniST (XD)": "#009E73",
+    "UniST (XD, P0 full-eval)": "#009E73",
     "DPM-STFM": "#CC79A7",
+    "DPM-v2 (XD)": "#E31A1C",
+    "DPM-v2 (XD, P0 full-eval)": "#E31A1C",
+    "DPM-v3 (XD)": "#CC79A7",
+    "DPM-v3 (XD, P0 full-eval)": "#CC79A7",
+    "DPM-SR (XD)": "#6A3D9A",
+    "DPM-SR (XD, P0 full-eval)": "#6A3D9A",
+    "DPM-SR v4 (XD E2E)": "#56B4E9",
+    "DPM-SR v4 (XD, P0 full-eval)": "#56B4E9",
+    "DPM-v5 (XD)": "#A6761D",
+    "DPM-v5 (XD, P0 full-eval)": "#A6761D",
+    "DPM-v5 rob0 (XD, P0 full-eval)": "#F6C667",
     "DPM-original (stable ckpt)": "#E69F00",
     "DPM-original (diffusion ckpt)": "#D55E00",
     "DPM-v2 (stable ckpt)": "#882255",
@@ -216,25 +238,51 @@ _MODEL_COLORS: Dict[str, str] = {
     "DPM-StableOnly": "#56B4E9",
     "DPM-NoDiffusion": "#E69F00",
     "DPM-NoDisentangle": "#A6761D",
+    "DPM-STFM-v2": "#A6761D",
+    "DPM-STFM-v3": "#B15928",
 }
-# Extras: distinct hues for any other model name (never overlap with values above)
+# Ordered extras: only for unknown model strings; use index (not hash) to avoid look-alike collisions.
 _EXTRA_MODEL_COLORS = [
-    "#332288",
-    "#882255",
-    "#44AA99",
-    "#AA4499",
-    "#999933",
-    "#117733",
-    "#661100",
-    "#6699CC",
+    "#332288",  # dark indigo
+    "#44AA99",  # teal
+    "#AA4499",  # dusk magenta
+    "#999933",  # olive
+    "#661100",  # brown-red
+    "#6699CC",  # steel blue
+    "#882255",  # wine
+    "#DDAA33",  # sand gold
+    "#BB3213",  # brick
+    "#5D3A9B",  # deep violet
+    "#008A8A",  # dark cyan
+    "#E58601",  # amber
 ]
 
 
+def _darker_edge(face_hex: str, factor: float = 0.38) -> str:
+    """Dark outline so adjacent light fills remain separable in print and on screen."""
+
+    import matplotlib.colors as mcolors
+
+    r, g, b = mcolors.to_rgb(face_hex)
+    return mcolors.to_hex((min(1.0, r * factor + 0.04), min(1.0, g * factor + 0.04), min(1.0, b * factor + 0.04)))
+
+
+def _strip_p0_eval_suffix(name: str) -> str:
+    s = str(name).strip()
+    for suf in (" (P0 full-eval)",):
+        if s.endswith(suf):
+            return s[: -len(suf)]
+    return s
+
+
 def _bar_color_for_model(name: str, index: int) -> str:
-    if name in _MODEL_COLORS:
-        return _MODEL_COLORS[name]
-    h = abs(hash(name))
-    return _EXTRA_MODEL_COLORS[(h + index) % len(_EXTRA_MODEL_COLORS)]
+    n = str(name)
+    if n in _MODEL_COLORS:
+        return _MODEL_COLORS[n]
+    n2 = _strip_p0_eval_suffix(n)
+    if n2 in _MODEL_COLORS:
+        return _MODEL_COLORS[n2]
+    return _EXTRA_MODEL_COLORS[index % len(_EXTRA_MODEL_COLORS)]
 
 
 def _is_highlight_model(name: str) -> bool:
@@ -345,8 +393,10 @@ def make_figure(
     ncol = min(n, 4)
     handles = []
     for name, color in zip(model_names, colors):
-        edge = "#1A1A1A" if _is_highlight_model(name) else "#4D4D4D"
-        lw = 1.25 if _is_highlight_model(name) else 0.6
+        if _is_highlight_model(name):
+            edge, lw = "#1A1A1A", 1.25
+        else:
+            edge, lw = _darker_edge(color, 0.32), 0.9
         rect = mpl.patches.Rectangle(
             (0, 0),
             1,
@@ -400,11 +450,10 @@ def _plot_grouped_bars(
     for index, name in enumerate(model_names):
         raw_values = values_by_model[name]
         values = [float(item) if item is not None else np.nan for item in raw_values]
-        edge_w = 1.2 if _is_highlight_model(name) else 0.55
-        edge_c = "#1A1A1A" if _is_highlight_model(name) else "#FAFAFA"
-        z = 5 + index
         if _is_highlight_model(name):
-            z = 25
+            edge_w, edge_c, z = 1.25, "#1A1A1A", 25
+        else:
+            edge_w, edge_c, z = 0.9, _darker_edge(colors[index], 0.32), 5 + index
         bars = ax.bar(
             x + offsets[index],
             values,

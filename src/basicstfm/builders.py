@@ -7,6 +7,7 @@ from typing import Iterable
 
 BUILTIN_MODULES = (
     "basicstfm.data.datamodule",
+    "basicstfm.data.monash_datamodule",
     "basicstfm.losses.disentangle_losses",
     "basicstfm.losses.diffusion_losses",
     "basicstfm.losses.common",
@@ -16,6 +17,7 @@ BUILTIN_MODULES = (
     "basicstfm.models.dpm_v2_stfm",
     "basicstfm.models.dpm_v3_stfm",
     "basicstfm.tasks.stable_residual_forecasting_task_v3",
+    "basicstfm.tasks.stable_residual_forecasting_task_v5",
     "basicstfm.models.mlp_forecaster",
     "basicstfm.models.st_foundation",
     "basicstfm.models.foundation",
