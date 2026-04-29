@@ -50,8 +50,8 @@ Thumbs.db
 wandb/
 mlruns/
 
-# Large / downloaded datasets (adjust if you commit small fixtures under data/)
-data/
+# Large / downloaded datasets (repo root only; do not use bare "data/" or scripts/src .../data/ is ignored)
+/data/
 
 # Torch / distributed
 *.elastic
