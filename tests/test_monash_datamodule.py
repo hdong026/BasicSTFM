@@ -82,3 +82,29 @@ def test_monash_series_norm_instance(tmp_path):
     batch = next(iter(dm.train_dataloader()))
     assert torch.isfinite(batch["x"]).all()
     assert torch.isfinite(batch["y"]).all()
+
+
+def test_monash_series_norm_instance_standard(tmp_path):
+    import_builtin_components()
+    root = tmp_path / "one"
+    _write_toy_monash(root)
+
+    dm = DATAMODULES.build(
+        {
+            "type": "MonashSeriesWindowDataModule",
+            "monash_root": str(root),
+            "input_len": 24,
+            "output_len": 16,
+            "norm_mode": "instance_standard",
+            "scaler": {"type": "identity"},
+            "batch_size": 4,
+            "stride": 1,
+            "split": [0.7, 0.1, 0.2],
+        }
+    )
+    dm.setup()
+    batch = next(iter(dm.train_dataloader()))
+    x0 = batch["x"][0].numpy().reshape(-1)
+    assert np.isfinite(x0).all()
+    assert abs(float(np.mean(x0))) < 0.05
+    assert 0.8 < float(np.std(x0)) < 1.2

@@ -21,6 +21,7 @@ class StageSpec:
     scheduler: Optional[Dict[str, Any]] = None
     load_from: Optional[str] = None
     load_method: str = "checkpoint"
+    allow_stable_trunk_channel_inflate: bool = False
     strict_load: bool = True
     save_artifact: Optional[str] = None
     freeze: List[str] = field(default_factory=list)
@@ -100,6 +101,7 @@ class StagePlan:
                 "metrics": [metric.get("type") for metric in stage.metrics],
                 "load_from": stage.load_from,
                 "load_method": stage.load_method,
+                "allow_stable_trunk_channel_inflate": stage.allow_stable_trunk_channel_inflate,
                 "save_artifact": stage.save_artifact,
                 "freeze": stage.freeze,
                 "unfreeze": stage.unfreeze,

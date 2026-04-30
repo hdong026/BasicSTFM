@@ -561,6 +561,11 @@ class MultiStageTrainer:
         named_logs: Dict[str, Dict[str, float]],
         prefix: str,
     ) -> Dict[str, float]:
+        # Do not macro-average raw-scale metrics across heterogeneous datasets.
+        skip_macro_suffixes = (
+            "metric/raw_mae",
+            "metric/raw_rmse",
+        )
         aggregate: Dict[str, float] = {}
         counts: Dict[str, int] = {}
         for dataset_name, logs in named_logs.items():
@@ -571,6 +576,10 @@ class MultiStageTrainer:
                 aggregate[f"{prefix}/dataset/{dataset_name}/{suffix}"] = float(value)
         for key, total in list(aggregate.items()):
             if key.startswith(f"{prefix}/dataset/"):
+                continue
+            suffix = key[len(prefix) + 1 :] if key.startswith(f"{prefix}/") else key
+            if suffix in skip_macro_suffixes:
+                del aggregate[key]
                 continue
             aggregate[key] = total / max(counts.get(key, 1), 1)
         return aggregate
@@ -704,7 +713,11 @@ class MultiStageTrainer:
             raise RuntimeError("Model is not initialized")
 
         model = unwrap_model(self.model)
-        if stage.load_method in {"checkpoint", "state_dict"}:
+        if stage.load_method in {"checkpoint", "state_dict", "stable_trunk_channel_inflate"}:
+            stable_trunk_inflate = (
+                stage.load_method == "stable_trunk_channel_inflate"
+                or stage.allow_stable_trunk_channel_inflate
+            )
             return load_checkpoint(
                 path,
                 model,
@@ -713,6 +726,7 @@ class MultiStageTrainer:
                 strict=strict,
                 map_location=str(self.device),
                 restore_rng=restore_rng,
+                stable_trunk_channel_inflate=stable_trunk_inflate,
             )
 
         loader = getattr(model, stage.load_method, None)

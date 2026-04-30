@@ -17,6 +17,16 @@ from basicstfm.utils.spectral_ops import (
 )
 
 
+def _scalar_masked_mean(abs_err: torch.Tensor, mask: Any) -> torch.Tensor:
+    if mask is None:
+        return abs_err.mean()
+    m = mask
+    while m.ndim < abs_err.ndim:
+        m = m.unsqueeze(-1)
+    m = m.to(dtype=abs_err.dtype, device=abs_err.device).expand_as(abs_err)
+    return (abs_err * m).sum() / m.sum().clamp_min(1.0)
+
+
 @TASKS.register("StableResidualForecastingTask")
 class StableResidualForecastingTask(Task):
     """Task that enforces stable-first, residual-diffusion-second learning."""
@@ -44,6 +54,7 @@ class StableResidualForecastingTask(Task):
         print_debug: bool = False,
         # Disabled by default in the current repair phase.
         cross_cov_weight: float = 0.0,
+        primary_supervision_space: str = "denormalized",
     ) -> None:
         self.input_key = input_key
         self.target_key = target_key
@@ -51,6 +62,11 @@ class StableResidualForecastingTask(Task):
         self.model_mode = model_mode
         self.phase = str(phase)
         self.mask_key = mask_key
+
+        pss = str(primary_supervision_space).lower().replace("-", "_")
+        if pss not in {"denormalized", "normalized"}:
+            raise ValueError("primary_supervision_space must be 'denormalized' or 'normalized'")
+        self.primary_supervision_space = pss
 
         if stable_target not in {"lowfreq", "trend", "target"}:
             raise ValueError("stable_target must be one of: lowfreq, trend, target")
@@ -194,11 +210,15 @@ class StableResidualForecastingTask(Task):
 
         residual_target_scaled = y_scaled - y_stable_scaled.detach()
 
-        # Keep the primary supervised term aligned with the standard forecasting recipes:
-        # denormalized prediction + configured MAE/MSE collection.
-        pred = self.inverse_transform(y_hat_scaled, batch=batch)
-        pred, target_denorm, metric_mask = self._align_pred_target(pred, raw_target, raw_mask)
-        main_loss_out = losses(pred, target_denorm, mask=metric_mask)
+        pred_denorm = self.inverse_transform(y_hat_scaled, batch=batch)
+        pred_denorm, target_denorm, metric_mask = self._align_pred_target(
+            pred_denorm, raw_target, raw_mask
+        )
+
+        if self.primary_supervision_space == "normalized":
+            main_loss_out = losses(y_hat_scaled, y_scaled, mask=loss_mask)
+        else:
+            main_loss_out = losses(pred_denorm, target_denorm, mask=metric_mask)
 
         l_final = main_loss_out["loss"]
         l_stable = stable_forecast_loss(y_stable_scaled, stable_target_scaled, mask=loss_mask)
@@ -219,6 +239,13 @@ class StableResidualForecastingTask(Task):
         )
 
         logs: Dict[str, torch.Tensor] = dict(main_loss_out["logs"])
+
+        with torch.no_grad():
+            if self.primary_supervision_space == "normalized":
+                logs["metric/raw_mae"] = _scalar_masked_mean(
+                    (pred_denorm - target_denorm).abs(),
+                    metric_mask,
+                )
 
         if self.log_aux_losses:
             logs.update(
@@ -273,10 +300,18 @@ class StableResidualForecastingTask(Task):
             )
 
         logs["loss/total"] = total.detach()
+
+        if self.primary_supervision_space == "normalized":
+            metric_pred = y_hat_scaled.detach()
+            metric_target = y_scaled.detach()
+        else:
+            metric_pred = pred_denorm.detach()
+            metric_target = target_denorm.detach()
+
         return {
             "loss": total,
             "logs": logs,
-            "pred": pred.detach(),
-            "target": target_denorm.detach(),
+            "pred": metric_pred,
+            "target": metric_target,
             "mask": None if metric_mask is None else metric_mask.detach(),
         }

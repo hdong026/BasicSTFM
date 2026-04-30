@@ -23,7 +23,13 @@ from basicstfm.data.scaler import DatasetAwareScaler, build_scaler
 from basicstfm.registry import DATAMODULES
 
 
-NormMode = Literal["global_standard", "per_series_standard", "instance"]
+NormMode = Literal[
+    "global_standard",
+    "per_series_standard",
+    "instance",
+    "instance_standard",
+    "robust_instance",
+]
 
 
 def _resolve_split_edges(length: int, split: Sequence[float]) -> Tuple[int, int, int]:
@@ -45,6 +51,31 @@ def _finite_mu_sigma(block: np.ndarray) -> Tuple[float, float]:
     if sig < 1e-6:
         sig = 1e-6
     return mu, sig
+
+
+def _input_window_mu_sigma(x: np.ndarray, *, eps: float = 1e-6) -> Tuple[float, float]:
+    """Mean/std from input window only (for ``instance_standard``)."""
+    vals = np.asarray(x, dtype=np.float64).reshape(-1)
+    vals = vals[np.isfinite(vals)]
+    if vals.size == 0:
+        return 0.0, 1.0
+    mu = float(np.mean(vals))
+    sig = float(np.std(vals))
+    if sig < eps:
+        sig = 1.0
+    return mu, sig
+
+
+def _robust_input_mu_sigma(x: np.ndarray, *, eps: float = 1e-6) -> Tuple[float, float]:
+    """Median + 1.4826 * MAD on finite input values (``robust_instance``)."""
+    vals = np.asarray(x, dtype=np.float64).reshape(-1)
+    vals = vals[np.isfinite(vals)]
+    if vals.size == 0:
+        return 0.0, 1.0
+    med = float(np.median(vals))
+    mad = float(np.median(np.abs(vals - med)))
+    scale = max(1.4826 * mad, eps)
+    return med, scale
 
 
 def enumerate_window_placements(
@@ -171,6 +202,14 @@ class MonashSeriesWindowDataset(Dataset):
             mu, sig = _finite_mu_sigma(np.concatenate([xv, yv]))
             xv = ((xv - mu) / sig).astype(np.float32)
             yv = ((yv - mu) / sig).astype(np.float32)
+        elif self.norm_mode == "instance_standard":
+            mu, sig = _input_window_mu_sigma(xv)
+            xv = ((xv - mu) / sig).astype(np.float32)
+            yv = ((yv - mu) / sig).astype(np.float32)
+        elif self.norm_mode == "robust_instance":
+            loc, scale = _robust_input_mu_sigma(xv)
+            xv = ((xv - loc) / scale).astype(np.float32)
+            yv = ((yv - loc) / scale).astype(np.float32)
         elif self.norm_mode == "per_series_standard":
             mu = float(self.series_mu[s_idx])
             sig = float(self.series_sigma[s_idx])
@@ -304,9 +343,16 @@ class MonashSeriesWindowDataModule:
         elif nm in {"instance", "instance_norm"}:
             self._norm_enum = "instance"
             self.scaler_cfg = scaler or {"type": "identity"}
+        elif nm in {"instance_standard", "instance_zscore"}:
+            self._norm_enum = "instance_standard"
+            self.scaler_cfg = scaler or {"type": "identity"}
+        elif nm in {"robust_instance", "instance_robust"}:
+            self._norm_enum = "robust_instance"
+            self.scaler_cfg = scaler or {"type": "identity"}
         else:
             raise ValueError(
-                f"norm_mode must be global_standard | per_series_standard | instance, got {norm_mode!r}"
+                f"norm_mode must be global_standard | per_series_standard | instance | "
+                f"instance_standard | robust_instance, got {norm_mode!r}"
             )
 
         self.shuffle_train = bool(shuffle_train)
@@ -510,6 +556,12 @@ class MonashMultiDatasetWindowDataModule:
         elif nm in {"instance", "instance_norm"}:
             self._norm_enum = "instance"
             self.default_scaler_cfg = scaler or {"type": "identity"}
+        elif nm in {"instance_standard", "instance_zscore"}:
+            self._norm_enum = "instance_standard"
+            self.default_scaler_cfg = scaler or {"type": "identity"}
+        elif nm in {"robust_instance", "instance_robust"}:
+            self._norm_enum = "robust_instance"
+            self.default_scaler_cfg = scaler or {"type": "identity"}
         else:
             raise ValueError(f"unsupported norm_mode: {norm_mode!r}")
 
@@ -575,6 +627,10 @@ class MonashMultiDatasetWindowDataModule:
                 norm_enum = "per_series_standard"
             elif nm in {"instance", "instance_norm"}:
                 norm_enum = "instance"
+            elif nm in {"instance_standard", "instance_zscore"}:
+                norm_enum = "instance_standard"
+            elif nm in {"robust_instance", "instance_robust"}:
+                norm_enum = "robust_instance"
             else:
                 norm_enum = self._norm_enum
 
