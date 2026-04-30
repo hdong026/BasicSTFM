@@ -2,8 +2,20 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
+
+
+def _merge_dicts(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+    merged = deepcopy(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _merge_dicts(merged[key], value)
+        else:
+            merged[key] = deepcopy(value)
+    return merged
 
 
 @dataclass
@@ -119,3 +131,58 @@ class StagePlan:
             }
             for stage in self.stages
         ]
+
+    @staticmethod
+    def describe_factost_protocol_audit(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Merge ``data`` like ``MultiStageTrainer`` and surface scaler / RevIN / split flags."""
+
+        plan = StagePlan.from_config(cfg)
+        base_data = dict(cfg.get("data") or {})
+        resolved_recipes: List[Dict[str, Any]] = []
+        audit_rows: List[Dict[str, Any]] = []
+        current = deepcopy(base_data)
+        for stage in plan.stages:
+            override = stage.data
+            reset_requested = stage.reset_data
+            if reset_requested:
+                override_type = None if not isinstance(override, dict) else override.get("type")
+                base_type = base_data.get("type")
+                if override_type is not None and override_type != base_type:
+                    current = {"type": override_type}
+                else:
+                    current = deepcopy(base_data)
+            elif resolved_recipes:
+                current = deepcopy(resolved_recipes[-1])
+            else:
+                current = deepcopy(base_data)
+
+            if override is not None:
+                current = _merge_dicts(current, override)
+            resolved_recipes.append(deepcopy(current))
+
+            task = dict(stage.task)
+            scaler = current.get("scaler")
+            scaler_type = scaler.get("type") if isinstance(scaler, dict) else None
+            data_path = current.get("data_path")
+            dataset_key = current.get("dataset_key") or current.get("name")
+            if dataset_key is None and data_path:
+                dataset_key = Path(str(data_path)).parent.name
+            audit_rows.append(
+                {
+                    "name": stage.name,
+                    "dataset_key": dataset_key,
+                    "data_path": data_path,
+                    "input_len": current.get("input_len"),
+                    "output_len": current.get("output_len"),
+                    "data_scaler_type": scaler_type,
+                    "factost_split": bool(current.get("factost_split", False)),
+                    "split": list(current["split"]) if current.get("split") is not None else None,
+                    "task_type": task.get("type"),
+                    "eval_only": bool(stage.eval_only),
+                    "use_revin": bool(task.get("use_revin", False)),
+                    "factost_original_scale": bool(task.get("factost_original_scale", False)),
+                    "revin_loss_space": task.get("revin_loss_space"),
+                    "revin_metric_space": task.get("revin_metric_space"),
+                }
+            )
+        return audit_rows

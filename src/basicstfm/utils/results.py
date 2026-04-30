@@ -109,7 +109,7 @@ def summarize_stage_rows(
             "checkpoint": row.get("checkpoint"),
         }
         for metric in metric_columns:
-            item[metric] = row.get(metric)
+            item[metric] = coalesce_metric_row(row, metric)
         summary.append(item)
     return summary
 
@@ -264,7 +264,7 @@ def build_paper_summary(
         if dataset not in dataset_names:
             continue
         regime = infer_stage_regime(row)
-        value = row.get(metric_key)
+        value = coalesce_metric_row(row, metric_key)
         value_map[(model, str(dataset), regime)] = None if value is None else float(value)
 
     summary: List[Dict[str, Any]] = []
@@ -298,6 +298,45 @@ def normalize_metric_name(metric: str, split: str = "test") -> str:
     if metric.startswith(("train/", "val/", "test/")):
         return metric
     return f"{split}/{metric.lstrip('/')}"
+
+
+_PRIMARY_MAE_FALLBACKS = (
+    "metric/mae",
+    "metric/mae_original",
+    "metric/mae_revin_raw",
+    "metric/mae_norm",
+    "metric/mae_raw",
+)
+
+_PRIMARY_RMSE_FALLBACKS = (
+    "metric/rmse",
+    "metric/rmse_original",
+    "metric/rmse_revin_raw",
+    "metric/rmse_norm",
+    "metric/rmse_raw",
+)
+
+
+def metric_fallback_chain(prefixed_key: str) -> List[str]:
+    """Given ``test/metric/mae``, return lookup order including RevIN / FactoST aliases."""
+
+    parts = prefixed_key.split("/", 1)
+    if len(parts) != 2:
+        return [prefixed_key]
+    prefix, suffix = parts
+    if suffix == "metric/mae":
+        return [f"{prefix}/{item}" for item in _PRIMARY_MAE_FALLBACKS]
+    if suffix == "metric/rmse":
+        return [f"{prefix}/{item}" for item in _PRIMARY_RMSE_FALLBACKS]
+    return [prefixed_key]
+
+
+def coalesce_metric_row(row: Mapping[str, Any], prefixed_key: str) -> Any:
+    for key in metric_fallback_chain(prefixed_key):
+        val = row.get(key)
+        if val is not None:
+            return val
+    return None
 
 
 def write_csv(path: str | Path, rows: Sequence[Dict[str, Any]], fieldnames: Optional[Sequence[str]] = None) -> None:

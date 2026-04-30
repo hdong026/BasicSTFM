@@ -12,12 +12,13 @@ from torch.utils.data import DataLoader, Dataset, Subset
 from torch.utils.data.distributed import DistributedSampler
 from torch.utils.data._utils.collate import default_collate
 
+from basicstfm.data.factost_split import resolve_factost_split_lengths, split_triple_to_split_field
 from basicstfm.data.scaler import DatasetAwareScaler, build_scaler
 from basicstfm.data.window_dataset import WindowDataset
 from basicstfm.registry import DATAMODULES
 
 
-def _split_lengths(total: int, split: Sequence[float]) -> Tuple[int, int, int]:
+def _split_lengths(total: int, split: Sequence[float | int]) -> Tuple[int, int, int]:
     if len(split) != 3:
         raise ValueError("split must contain train/val/test ratios or lengths")
     if all(isinstance(x, float) and x <= 1.0 for x in split):
@@ -301,6 +302,7 @@ class WindowDataModule:
         mmap_mode: Optional[str] = None,
         max_val_windows: Optional[int] = None,
         max_test_windows: Optional[int] = None,
+        factost_split: bool = False,
     ) -> None:
         if output_len is not None:
             target_len = output_len
@@ -331,6 +333,8 @@ class WindowDataModule:
         self._epoch = 0
         self.max_val_windows = None if max_val_windows is None else int(max_val_windows)
         self.max_test_windows = None if max_test_windows is None else int(max_test_windows)
+        self.factost_split = bool(factost_split)
+        self._factost_split_audit: Optional[Dict[str, Any]] = None
         self.scaler = build_scaler(self.scaler_cfg)
         self.graph: Optional[torch.Tensor] = None
         self.datasets: Dict[str, Dataset] = {}
@@ -371,6 +375,8 @@ class WindowDataModule:
             "max_val_windows_capped": self.max_val_windows is not None,
             "max_test_windows_capped": self.max_test_windows is not None,
             "num_windows": {"train": n_train, "val": n_val, "test": n_test},
+            "factost_split": self.factost_split,
+            "factost_split_audit": self._factost_split_audit,
         }
 
     def setup(self) -> None:
@@ -381,7 +387,16 @@ class WindowDataModule:
             raise ValueError(f"Expected [T, N, C] data, got {array.shape}")
         self.data_shape = tuple(int(x) for x in array.shape)
 
-        train_len, val_len, test_len = _split_lengths(len(array), self.split)
+        split_spec: Sequence[float | int] = self.split
+        self._factost_split_audit = None
+        if self.factost_split:
+            triple, audit = resolve_factost_split_lengths(self.data_path, len(array), self.split)
+            self._factost_split_audit = audit
+            if triple is not None:
+                split_spec = split_triple_to_split_field(triple)
+                self.split = tuple(int(x) for x in split_spec)
+
+        train_len, val_len, test_len = _split_lengths(len(array), split_spec)
         train_raw = array[:train_len]
         val_raw = array[train_len : train_len + val_len]
         test_raw = array[train_len + val_len : train_len + val_len + test_len]
@@ -890,6 +905,7 @@ class MultiDatasetWindowDataModule:
         mmap_mode: Optional[str] = None,
         max_val_windows: Optional[int] = None,
         max_test_windows: Optional[int] = None,
+        factost_split: bool = False,
     ) -> None:
         if output_len is not None:
             target_len = output_len
@@ -903,6 +919,7 @@ class MultiDatasetWindowDataModule:
         self.default_input_key = input_key
         self.default_graph_key = graph_key
         self.default_split = tuple(split)
+        self.default_factost_split = bool(factost_split)
         self.default_stride = int(stride)
         self.default_scaler_cfg = scaler or {"type": "standard"}
         self.batch_size = int(batch_size)
@@ -962,7 +979,16 @@ class MultiDatasetWindowDataModule:
             if array.ndim != 3:
                 raise ValueError(f"Expected [T, N, C] data for {name}, got {array.shape}")
 
-            train_len, val_len, test_len = _split_lengths(len(array), cfg["split"])
+            split_spec: Sequence[float | int] = cfg["split"]
+            factost_audit = None
+            if cfg["factost_split"]:
+                triple, audit = resolve_factost_split_lengths(cfg["data_path"], len(array), cfg["split"])
+                factost_audit = audit
+                if triple is not None:
+                    split_spec = split_triple_to_split_field(triple)
+                    cfg["split"] = tuple(int(x) for x in split_spec)
+
+            train_len, val_len, test_len = _split_lengths(len(array), split_spec)
             train_raw = array[:train_len]
             val_raw = array[train_len : train_len + val_len]
             test_raw = array[train_len + val_len : train_len + val_len + test_len]
@@ -1032,6 +1058,7 @@ class MultiDatasetWindowDataModule:
                 "batch_size": int(cfg["batch_size"]),
                 "split": list(cfg["split"]),
                 "stride": int(cfg["stride"]),
+                "factost_split_audit": factost_audit,
             }
 
         self.scaler = DatasetAwareScaler.from_scalers(
@@ -1119,6 +1146,7 @@ class MultiDatasetWindowDataModule:
             "scaler": dict(cfg.get("scaler", self.default_scaler_cfg)),
             "batch_size": int(cfg.get("batch_size", self.batch_size)),
             "max_train_windows": mtw,
+            "factost_split": bool(cfg.get("factost_split", self.default_factost_split)),
         }
 
     def _make_split_loaders(

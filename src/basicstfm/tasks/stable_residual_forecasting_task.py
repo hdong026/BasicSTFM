@@ -61,6 +61,7 @@ class StableResidualForecastingTask(Task):
         revin_eps: float = 1e-5,
         revin_loss_space: str = "normalized",
         revin_metric_space: str = "raw",
+        factost_original_scale: bool = False,
     ) -> None:
         self.input_key = input_key
         self.target_key = target_key
@@ -113,8 +114,16 @@ class StableResidualForecastingTask(Task):
             raise ValueError("revin_metric_space must be 'normalized' or 'raw'")
         self.revin_metric_space = rms
 
+        self.factost_original_scale = bool(factost_original_scale)
+
         #: Logged once per stage start in ``MultiStageTrainer`` when RevIN targets are enabled.
-        self.scale_protocol: Optional[str] = "factost_revin_value" if self.use_revin else None
+        if self.use_revin:
+            self.scale_protocol = (
+                "factost_revin_value|factost_original_scale="
+                f"{self.factost_original_scale}|revin_metric_space={self.revin_metric_space}"
+            )
+        else:
+            self.scale_protocol = None
 
     def _phase_weights(self) -> tuple[float, float, float, float]:
         if self.phase == "stable":
@@ -291,14 +300,30 @@ class StableResidualForecastingTask(Task):
                 if "loss/mse" in logs:
                     logs["loss/mse_norm"] = logs["loss/mse"]
             with torch.no_grad():
-                logs["metric/mae_raw"] = _scalar_masked_mean(
+                err_norm = (y_hat_scaled - y_scaled).abs()
+                sq_norm = (y_hat_scaled - y_scaled).pow(2)
+                logs["metric/mae_norm"] = _scalar_masked_mean(err_norm, loss_mask)
+                logs["metric/rmse_norm"] = torch.sqrt(
+                    _scalar_masked_mean(sq_norm, loss_mask).clamp_min(1e-12)
+                )
+                y_hat_rr = factost_value_revin_inverse(y_hat_scaled.detach(), batch)
+                y_tgt_rr = factost_value_revin_inverse(y_scaled.detach(), batch)
+                err_rr = (y_hat_rr - y_tgt_rr).abs()
+                sq_rr = (y_hat_rr - y_tgt_rr).pow(2)
+                logs["metric/mae_revin_raw"] = _scalar_masked_mean(err_rr, loss_mask)
+                logs["metric/rmse_revin_raw"] = torch.sqrt(
+                    _scalar_masked_mean(sq_rr, loss_mask).clamp_min(1e-12)
+                )
+                logs["metric/mae_original"] = _scalar_masked_mean(
                     (pred_denorm - target_denorm).abs(),
                     metric_mask,
                 )
-                sq = (pred_denorm - target_denorm).pow(2)
-                logs["metric/rmse_raw"] = torch.sqrt(
-                    _scalar_masked_mean(sq, metric_mask).clamp_min(1e-12)
+                sq_o = (pred_denorm - target_denorm).pow(2)
+                logs["metric/rmse_original"] = torch.sqrt(
+                    _scalar_masked_mean(sq_o, metric_mask).clamp_min(1e-12)
                 )
+                logs["metric/mae_raw"] = logs["metric/mae_original"]
+                logs["metric/rmse_raw"] = logs["metric/rmse_original"]
         elif self.primary_supervision_space == "normalized":
             with torch.no_grad():
                 logs["metric/mae_raw"] = _scalar_masked_mean(
@@ -365,13 +390,14 @@ class StableResidualForecastingTask(Task):
         logs["loss/total"] = total.detach()
 
         if self.use_revin:
-            if self.revin_metric_space == "raw":
+            report_original = self.factost_original_scale or self.revin_metric_space == "raw"
+            if report_original:
                 metric_pred = pred_denorm.detach()
                 metric_target = target_denorm.detach()
                 out_mask = metric_mask
             else:
-                metric_pred = y_hat_scaled.detach()
-                metric_target = y_scaled.detach()
+                metric_pred = factost_value_revin_inverse(y_hat_scaled.detach(), batch)
+                metric_target = factost_value_revin_inverse(y_scaled.detach(), batch)
                 out_mask = loss_mask
         elif self.primary_supervision_space == "normalized":
             metric_pred = y_hat_scaled.detach()

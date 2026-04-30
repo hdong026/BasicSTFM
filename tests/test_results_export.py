@@ -8,6 +8,7 @@ from pathlib import Path
 from basicstfm.utils.results import (
     build_markdown_table,
     build_paper_summary,
+    coalesce_metric_row,
     discover_stage_result_files,
     filter_stage_rows,
     flatten_stage_results,
@@ -70,6 +71,24 @@ class ResultsExportTest(unittest.TestCase):
             self.assertIn("experiment_name", markdown)
             self.assertIn("test/metric/mae", markdown)
             self.assertIn("exp_a", markdown)
+
+    def test_summarize_coalesces_missing_primary_mae(self):
+        rows = [
+            {
+                "experiment_name": "exp_proto",
+                "stage_name": "etth2_zero_shot",
+                "dataset": "ETTh2",
+                "test/metric/mae_revin_raw": 1.23,
+                "test/metric/rmse_revin_raw": 2.5,
+            }
+        ]
+        summary = summarize_stage_rows(rows, split="test", metrics=["metric/mae", "metric/rmse"])
+        self.assertEqual(summary[0]["test/metric/mae"], 1.23)
+        self.assertEqual(summary[0]["test/metric/rmse"], 2.5)
+
+    def test_coalesce_prefers_primary_when_present(self):
+        row = {"test/metric/mae": 9.0, "test/metric/mae_original": 3.0}
+        self.assertEqual(coalesce_metric_row(row, "test/metric/mae"), 9.0)
 
     def test_paper_summary_groups_zero_and_few_shot_rows(self):
         rows = [

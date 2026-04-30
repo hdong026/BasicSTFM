@@ -42,7 +42,17 @@ def main(argv: Optional[list[str]] = None) -> None:
         return
 
     if args.command == "dry-run":
-        print(json.dumps(StagePlan.from_config(cfg).describe(), indent=2))
+        plan = StagePlan.from_config(cfg)
+        print(
+            json.dumps(
+                {
+                    "stages": plan.describe(),
+                    "factost_protocol_audit": StagePlan.describe_factost_protocol_audit(cfg),
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
         return
 
     import_builtin_components()
