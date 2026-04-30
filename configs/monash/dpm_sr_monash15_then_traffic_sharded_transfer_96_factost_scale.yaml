@@ -1,15 +1,16 @@
 # Monash temporal pretrain (Stage0) -> traffic sharded ST pretrain (Stages I–III) -> downstream transfer.
+# Fork: Electricity / ETTh2 / Weather use identity scaler + StableResidualForecastingTask.use_revin (FactoST-style value-channel RevIN).
 # Prerequisites: data shards (build_largest_cross_domain_shards.py) + Monash-15 (scripts/data/prepare_monash15.py).
 # Stage I loads Monash stable trunk: set MONASH_STAGE0_CKPT or rely on default path to monash_temporal_stable_law_pretraining_last.pt
 # P0 downstream: val/test full split (no max_val_windows caps on target eval).
 
-experiment_name: dpm_sr_monash15_then_traffic_sharded_transfer_96
+experiment_name: dpm_sr_monash15_then_traffic_sharded_transfer_96_factost_scale
 seed: 42
 
 trainer:
   type: MultiStageTrainer
   device: auto
-  work_dir: runs/dpm_sr_monash15_then_traffic_sharded_transfer_96
+  work_dir: runs/dpm_sr_monash15_then_traffic_sharded_transfer_96_factost_scale
   log_every: 50
 
 dataset_registry:

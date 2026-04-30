@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Dict, Optional, Sequence, Tuple, Union
 
 import torch
 
+from basicstfm.data.revin import factost_value_revin_inverse, factost_value_revin_normalize
 from basicstfm.losses.disentangle_losses import cross_covariance_penalty
 from basicstfm.losses.stable_losses import stable_forecast_loss
 from basicstfm.registry import TASKS
@@ -55,6 +56,9 @@ class StableResidualForecastingTask(Task):
         # Disabled by default in the current repair phase.
         cross_cov_weight: float = 0.0,
         primary_supervision_space: str = "denormalized",
+        use_revin: bool = False,
+        revin_value_channel: Union[int, Sequence[int]] = 0,
+        revin_eps: float = 1e-5,
     ) -> None:
         self.input_key = input_key
         self.target_key = target_key
@@ -89,6 +93,15 @@ class StableResidualForecastingTask(Task):
         self.log_debug_tensors = bool(log_debug_tensors)
         self.print_debug = bool(print_debug)
         self._step_counter = 0
+
+        self.use_revin = bool(use_revin)
+        if isinstance(revin_value_channel, int):
+            self.revin_value_channels: Tuple[int, ...] = (int(revin_value_channel),)
+        else:
+            self.revin_value_channels = tuple(int(c) for c in revin_value_channel)
+        self.revin_eps = float(revin_eps)
+        #: Logged once per stage build in ``MultiStageTrainer`` when RevIN targets are enabled.
+        self.scaling_protocol: Optional[str] = "factost_revin_value" if self.use_revin else None
 
     def _phase_weights(self) -> tuple[float, float, float, float]:
         if self.phase == "stable":
@@ -170,9 +183,16 @@ class StableResidualForecastingTask(Task):
         raw_x = batch[self.input_key]
         raw_target = batch[self.target_key]
 
-        # Training losses are computed in normalized space.
         x_scaled = self.transform(raw_x, batch=batch)
         y_scaled = self.transform(raw_target, batch=batch)
+        if self.use_revin:
+            x_scaled, y_scaled = factost_value_revin_normalize(
+                x_scaled,
+                y_scaled,
+                batch,
+                value_channels=self.revin_value_channels,
+                eps=self.revin_eps,
+            )
 
         outputs = model(
             x_scaled,
@@ -210,12 +230,16 @@ class StableResidualForecastingTask(Task):
 
         residual_target_scaled = y_scaled - y_stable_scaled.detach()
 
-        pred_denorm = self.inverse_transform(y_hat_scaled, batch=batch)
+        y_hat_rawspace = (
+            factost_value_revin_inverse(y_hat_scaled, batch) if self.use_revin else y_hat_scaled
+        )
+        pred_denorm = self.inverse_transform(y_hat_rawspace, batch=batch)
         pred_denorm, target_denorm, metric_mask = self._align_pred_target(
             pred_denorm, raw_target, raw_mask
         )
 
-        if self.primary_supervision_space == "normalized":
+        use_norm_main = self.use_revin or self.primary_supervision_space == "normalized"
+        if use_norm_main:
             main_loss_out = losses(y_hat_scaled, y_scaled, mask=loss_mask)
         else:
             main_loss_out = losses(pred_denorm, target_denorm, mask=metric_mask)
@@ -239,9 +263,13 @@ class StableResidualForecastingTask(Task):
         )
 
         logs: Dict[str, torch.Tensor] = dict(main_loss_out["logs"])
+        if self.use_revin:
+            for lk, lv in list(logs.items()):
+                if lk.startswith("loss/") and lk != "loss/total":
+                    logs[f"{lk}_norm"] = lv
 
         with torch.no_grad():
-            if self.primary_supervision_space == "normalized":
+            if self.primary_supervision_space == "normalized" or self.use_revin:
                 logs["metric/raw_mae"] = _scalar_masked_mean(
                     (pred_denorm - target_denorm).abs(),
                     metric_mask,
@@ -301,7 +329,10 @@ class StableResidualForecastingTask(Task):
 
         logs["loss/total"] = total.detach()
 
-        if self.primary_supervision_space == "normalized":
+        if self.use_revin:
+            metric_pred = pred_denorm.detach()
+            metric_target = target_denorm.detach()
+        elif self.primary_supervision_space == "normalized":
             metric_pred = y_hat_scaled.detach()
             metric_target = y_scaled.detach()
         else:

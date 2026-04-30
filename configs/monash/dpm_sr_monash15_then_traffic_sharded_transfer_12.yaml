@@ -585,18 +585,22 @@ pipeline:
         batch_size: 8
         split: [0.7, 0.1, 0.2]
         scaler:
-          type: standard
+          type: identity
       load_from: srd_xd_joint
       strict_load: true
       task:
         type: StableResidualForecastingTask
         phase: joint
         model_mode: forecast
+        use_revin: true
+        revin_value_channel: 0
       losses:
         - type: mae
       metrics:
         - type: mae
+          name: mae_raw
         - type: rmse
+          name: rmse_raw
 
     - name: etth2_five_percent_mechanism_tuning
       epochs: 3
@@ -609,7 +613,7 @@ pipeline:
         batch_size: 8
         split: [0.7, 0.1, 0.2]
         scaler:
-          type: standard
+          type: identity
       load_from: srd_xd_joint
       strict_load: true
       few_shot_ratio: 0.05
@@ -625,6 +629,8 @@ pipeline:
         type: StableResidualForecastingTask
         phase: joint
         model_mode: forecast
+        use_revin: true
+        revin_value_channel: 0
         stable_target: lowfreq
         final_weight: 1.0
         stable_weight: 0.2
@@ -638,7 +644,9 @@ pipeline:
           weight: 0.05
       metrics:
         - type: mae
+          name: mae_raw
         - type: rmse
+          name: rmse_raw
       optimizer:
         type: AdamW
         lr: 0.0005
@@ -739,18 +747,22 @@ pipeline:
         batch_size: 8
         split: [0.7, 0.1, 0.2]
         scaler:
-          type: standard
+          type: identity
       load_from: srd_xd_joint
       strict_load: true
       task:
         type: StableResidualForecastingTask
         phase: joint
         model_mode: forecast
+        use_revin: true
+        revin_value_channel: 0
       losses:
         - type: mae
       metrics:
         - type: mae
+          name: mae_raw
         - type: rmse
+          name: rmse_raw
 
     - name: weather_tgt_five_percent_mechanism_tuning
       epochs: 3
@@ -763,7 +775,7 @@ pipeline:
         batch_size: 8
         split: [0.7, 0.1, 0.2]
         scaler:
-          type: standard
+          type: identity
       load_from: srd_xd_joint
       strict_load: true
       few_shot_ratio: 0.05
@@ -779,6 +791,8 @@ pipeline:
         type: StableResidualForecastingTask
         phase: joint
         model_mode: forecast
+        use_revin: true
+        revin_value_channel: 0
         stable_target: lowfreq
         final_weight: 1.0
         stable_weight: 0.2
@@ -792,7 +806,9 @@ pipeline:
           weight: 0.05
       metrics:
         - type: mae
+          name: mae_raw
         - type: rmse
+          name: rmse_raw
       optimizer:
         type: AdamW
         lr: 0.0005
@@ -815,18 +831,22 @@ pipeline:
         batch_size: 8
         split: [0.7, 0.1, 0.2]
         scaler:
-          type: standard
+          type: identity
       load_from: srd_xd_joint
       strict_load: true
       task:
         type: StableResidualForecastingTask
         phase: joint
         model_mode: forecast
+        use_revin: true
+        revin_value_channel: 0
       losses:
         - type: mae
       metrics:
         - type: mae
+          name: mae_raw
         - type: rmse
+          name: rmse_raw
 
     - name: electricity_five_percent_mechanism_tuning
       epochs: 3
@@ -839,7 +859,7 @@ pipeline:
         batch_size: 8
         split: [0.7, 0.1, 0.2]
         scaler:
-          type: standard
+          type: identity
       load_from: srd_xd_joint
       strict_load: true
       few_shot_ratio: 0.05
@@ -855,6 +875,8 @@ pipeline:
         type: StableResidualForecastingTask
         phase: joint
         model_mode: forecast
+        use_revin: true
+        revin_value_channel: 0
         stable_target: lowfreq
         final_weight: 1.0
         stable_weight: 0.2
@@ -868,7 +890,9 @@ pipeline:
           weight: 0.05
       metrics:
         - type: mae
+          name: mae_raw
         - type: rmse
+          name: rmse_raw
       optimizer:
         type: AdamW
         lr: 0.0005

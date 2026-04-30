@@ -155,6 +155,9 @@ class MultiStageTrainer:
         )
         self._apply_trainability(stage)
         task = TASKS.build(stage.task)
+        proto = getattr(task, "scaling_protocol", None)
+        if proto:
+            self.logger.info("scaling_protocol=%s", proto)
         if hasattr(task, "set_scaler") and hasattr(self.datamodule, "get_scaler"):
             task.set_scaler(self.datamodule.get_scaler())
         losses = LossCollection(stage.losses).to(self.device)
