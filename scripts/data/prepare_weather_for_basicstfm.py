@@ -6,6 +6,10 @@ Primary CSV: ``weather.csv`` from
 (path ``weather/weather.csv``), matching the Autoformer / TSLib preprocessed release.
 
 Optional: train-split-only Pearson top-k graph (same convention as ``prepare_ettm_for_basicstfm.py``).
+
+Missing / invalid entries in some TSLib releases are encoded as **±9999**; by default this script
+masks those (and non-finite values), then applies **per-variable linear interpolation along time**
+with **nearest-valid** edge fill before writing ``data.npz``.
 """
 
 from __future__ import annotations
@@ -25,6 +29,7 @@ if str(_SCRIPTS_DATA) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DATA))
 
 import prepare_ettm_for_basicstfm as ett  # noqa: E402
+import timeseries_sentinel_clean as tsc  # noqa: E402
 
 # Autoformer README: Google Drive folder with all six benchmarks (incl. Weather).
 AUTOFORMER_DRIVE_URL = (
@@ -118,6 +123,17 @@ def build_parser() -> argparse.ArgumentParser:
         metavar=("TRAIN", "VAL", "TEST"),
         help="For graph construction / README; matches WindowDataModule.",
     )
+    p.add_argument(
+        "--missing-warn-frac",
+        type=float,
+        default=0.3,
+        help="Warn per-variable when sentinel/missing fraction before interpolation exceeds this.",
+    )
+    p.add_argument(
+        "--no-sentinel-clean",
+        action="store_true",
+        help="Disable ±9999 / non-finite masking and temporal interpolation (not recommended).",
+    )
     return p
 
 
@@ -145,7 +161,25 @@ def main() -> None:
     df_head = pd.read_csv(inp, nrows=min(5000, len(values) + 1))
     gran = infer_time_granularity_minutes(df_head[time_col])
 
-    data = values.astype(np.float32)[..., None]
+    cleaning_meta: dict = {"applied": False}
+    if args.no_sentinel_clean:
+        cleaned = values.astype(np.float32)
+    else:
+        masked = tsc.mask_sentinels_and_nonfinite(values, sentinel_values=tsc.DEFAULT_SENTINELS)
+        cleaned, interp_meta = tsc.interpolate_columns_linear_then_edge(
+            masked,
+            missing_warn_frac=float(args.missing_warn_frac),
+            variable_names=node_names,
+        )
+        cleaning_meta = {
+            "applied": True,
+            "sentinel_values": list(tsc.DEFAULT_SENTINELS),
+            "interpolation": interp_meta,
+        }
+        for w in interp_meta.get("warnings", []):
+            print(f"[weather-clean] WARNING: {w}", file=sys.stderr)
+
+    data = cleaned.astype(np.float32)[..., None]
     t, n, c = data.shape
 
     meta = {
@@ -163,6 +197,7 @@ def main() -> None:
         "num_variables": n,
         "variable_names": node_names,
         "data_shape_canonical": [t, n, c],
+        "sentinel_cleaning": cleaning_meta,
     }
     (out_dir / "dataset_meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
@@ -246,6 +281,9 @@ def main() -> None:
 ```bash
 python scripts/data/prepare_weather_for_basicstfm.py --download --build-adj --topk {args.topk}
 ```
+
+Sentinel cleanup (±9999 / NaN / Inf), temporal interpolation, and edge fill run **by default**
+(use ``--no-sentinel-clean`` only for debugging raw CSV dumps).
 """
 
     (out_dir / "README.md").write_text(readme, encoding="utf-8")

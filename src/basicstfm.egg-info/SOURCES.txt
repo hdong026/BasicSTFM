@@ -14,6 +14,7 @@ src/basicstfm.egg-info/requires.txt
 src/basicstfm.egg-info/top_level.txt
 src/basicstfm/data/__init__.py
 src/basicstfm/data/datamodule.py
+src/basicstfm/data/factost_split.py
 src/basicstfm/data/monash_datamodule.py
 src/basicstfm/data/revin.py
 src/basicstfm/data/scaler.py
@@ -85,6 +86,7 @@ tests/test_dpm_stage_protocol.py
 tests/test_dpm_transfer_freeze.py
 tests/test_example_imports.py
 tests/test_factost_revin.py
+tests/test_factost_split.py
 tests/test_foundation_models.py
 tests/test_model_config_resolution.py
 tests/test_monash_datamodule.py

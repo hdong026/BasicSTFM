@@ -20,6 +20,7 @@ def factost_value_revin_normalize(
     *,
     value_channels: Union[int, Sequence[int]] = 0,
     eps: float = 1e-5,
+    scaled_std_floor: float = 0.05,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Normalize only selected channels using mean/std along time *of the input window x* only.
 
@@ -31,6 +32,10 @@ def factost_value_revin_normalize(
         revin_value_channels: tuple[int, ...]
 
     Statistics are computed per batch item, per node, per value channel.
+
+    ``eps`` follows FactoST-style numerical stability. ``scaled_std_floor`` applies only after
+    dataset scaling: nearly flat windows (common on sparse meteorological channels such as rain)
+    otherwise divide by ``eps`` and explode normalized targets when inputs are ~constant.
     """
 
     vc = _normalize_value_channels_tuple(value_channels)
@@ -44,6 +49,8 @@ def factost_value_revin_normalize(
     xv = torch.stack(slices_m, dim=-1)
     mean = xv.mean(dim=1, keepdim=True)
     std = xv.std(dim=1, keepdim=True, unbiased=False).clamp_min(float(eps))
+    if scaled_std_floor > 0:
+        std = torch.maximum(std, mean.new_tensor(float(scaled_std_floor)))
 
     batch["revin_mean"] = mean
     batch["revin_std"] = std

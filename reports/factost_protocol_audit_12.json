@@ -3,8 +3,8 @@
     {
       "stage_name": "metr_la_zero_shot",
       "dataset_key": "METR-LA",
-      "input_len": 96,
-      "output_len": 96,
+      "input_len": 12,
+      "output_len": 12,
       "split": [
         0.7,
         0.1,
@@ -18,6 +18,12 @@
         207,
         1
       ],
+      "raw_value_global_stats": {
+        "min": 0.0,
+        "max": 70.0,
+        "non_finite_frac": 0.0
+      },
+      "quality_warnings": [],
       "raw_value_ch0_stats": {
         "min": 0.0,
         "max": 70.0,
@@ -31,9 +37,13 @@
         "scaler_type": "standard",
         "use_revin": true,
         "factost_original_scale": true,
-        "factost_split_requested": false
+        "factost_split_requested": true
       },
-      "factost_split_meta": {},
+      "factost_split_meta": {
+        "data_path": "/home/dhz/BasicSTFM/data/METR-LA/data.npz",
+        "used_desc": false,
+        "desc_path": "/home/dhz/BasicSTFM/data/METR-LA/desc.json"
+      },
       "split_lengths": {
         "train": 23990,
         "val": 3427,
@@ -44,29 +54,29 @@
         "std_ch0": 19.49424934387207
       },
       "revin_batch_after_normalize": {
-        "x_mean": 0.00011518266546772793,
-        "x_std": 0.9975829720497131,
-        "y_mean": -3.0190587043762207,
-        "y_std": 8.181092262268066
+        "x_mean": 3.397752834644052e-08,
+        "x_std": 0.9847162365913391,
+        "y_mean": -0.7538100481033325,
+        "y_std": 5.0523576736450195
       },
       "baselines_raw_space_ch_all": {
         "persistence": {
-          "mae": 14.399867057800293,
-          "rmse": 24.75221061706543
+          "mae": 3.948657751083374,
+          "rmse": 8.666327476501465
         },
         "zero": {
-          "mae": 48.27679443359375,
-          "rmse": 53.4888801574707
+          "mae": 60.722625732421875,
+          "rmse": 61.66094970703125
         }
       },
       "baselines_dataset_scaled_space": {
         "persistence": {
-          "mae": 0.7386726140975952,
-          "rmse": 1.2697186470031738
+          "mae": 0.20255500078201294,
+          "rmse": 0.44455820322036743
         },
         "zero": {
-          "mae": 2.4764633178710938,
-          "rmse": 2.743828535079956
+          "mae": 3.1148996353149414,
+          "rmse": 3.1630330085754395
         }
       },
       "stage_results_metrics": null
@@ -74,8 +84,8 @@
     {
       "stage_name": "pems04_zero_shot",
       "dataset_key": "PEMS04",
-      "input_len": 96,
-      "output_len": 96,
+      "input_len": 12,
+      "output_len": 12,
       "split": [
         0.7,
         0.1,
@@ -89,6 +99,12 @@
         307,
         3
       ],
+      "raw_value_global_stats": {
+        "min": 0.0,
+        "max": 919.0,
+        "non_finite_frac": 0.0
+      },
+      "quality_warnings": [],
       "raw_value_ch0_stats": {
         "min": 0.0,
         "max": 919.0,
@@ -102,9 +118,13 @@
         "scaler_type": "standard",
         "use_revin": true,
         "factost_original_scale": true,
-        "factost_split_requested": false
+        "factost_split_requested": true
       },
-      "factost_split_meta": {},
+      "factost_split_meta": {
+        "data_path": "/home/dhz/BasicSTFM/data/PEMS04/data.npz",
+        "used_desc": false,
+        "desc_path": "/home/dhz/BasicSTFM/data/PEMS04/desc.json"
+      },
       "split_lengths": {
         "train": 11894,
         "val": 1699,
@@ -115,29 +135,29 @@
         "std_ch0": 157.0738525390625
       },
       "revin_batch_after_normalize": {
-        "x_mean": 0.09431440383195877,
-        "x_std": 0.8665874004364014,
-        "y_mean": 0.4135780930519104,
-        "y_std": 0.982740581035614
+        "x_mean": -0.054983723908662796,
+        "x_std": 0.7711642980575562,
+        "y_mean": 0.8478410840034485,
+        "y_std": 1.716313362121582
       },
       "baselines_raw_space_ch_all": {
         "persistence": {
-          "mae": 20.216196060180664,
-          "rmse": 46.59525680541992
+          "mae": 8.378521919250488,
+          "rmse": 19.35713005065918
         },
         "zero": {
-          "mae": 122.65601348876953,
-          "rmse": 197.22998046875
+          "mae": 60.48509216308594,
+          "rmse": 86.67489624023438
         }
       },
       "baselines_dataset_scaled_space": {
         "persistence": {
-          "mae": 0.4671214818954468,
-          "rmse": 0.9501825571060181
+          "mae": 0.13995389640331268,
+          "rmse": 0.24552899599075317
         },
         "zero": {
-          "mae": 3.6763572692871094,
-          "rmse": 4.726011753082275
+          "mae": 3.121896743774414,
+          "rmse": 4.730493545532227
         }
       },
       "stage_results_metrics": null
@@ -145,8 +165,8 @@
     {
       "stage_name": "pems07_zero_shot",
       "dataset_key": "PEMS07",
-      "input_len": 96,
-      "output_len": 96,
+      "input_len": 12,
+      "output_len": 12,
       "split": [
         0.7,
         0.1,
@@ -160,6 +180,12 @@
         883,
         1
       ],
+      "raw_value_global_stats": {
+        "min": 0.0,
+        "max": 1498.0,
+        "non_finite_frac": 0.0
+      },
+      "quality_warnings": [],
       "raw_value_ch0_stats": {
         "min": 0.0,
         "max": 1498.0,
@@ -173,9 +199,13 @@
         "scaler_type": "standard",
         "use_revin": true,
         "factost_original_scale": true,
-        "factost_split_requested": false
+        "factost_split_requested": true
       },
-      "factost_split_meta": {},
+      "factost_split_meta": {
+        "data_path": "/home/dhz/BasicSTFM/data/PEMS07/data.npz",
+        "used_desc": false,
+        "desc_path": "/home/dhz/BasicSTFM/data/PEMS07/desc.json"
+      },
       "split_lengths": {
         "train": 19756,
         "val": 2822,
@@ -186,29 +216,29 @@
         "std_ch0": 188.78733825683594
       },
       "revin_batch_after_normalize": {
-        "x_mean": 5.4030744649935514e-05,
-        "x_std": 0.9994348883628845,
-        "y_mean": -3.1406264305114746,
-        "y_std": 3.1528592109680176
+        "x_mean": 4.428159172675805e-08,
+        "x_std": 0.9878879189491272,
+        "y_mean": -0.2634112238883972,
+        "y_std": 1.6681197881698608
       },
       "baselines_raw_space_ch_all": {
         "persistence": {
-          "mae": 174.5980682373047,
-          "rmse": 219.35986328125
+          "mae": 31.779539108276367,
+          "rmse": 50.07857131958008
         },
         "zero": {
-          "mae": 264.9476318359375,
-          "rmse": 313.7738037109375
+          "mae": 370.2334899902344,
+          "rmse": 398.6582336425781
         }
       },
       "baselines_dataset_scaled_space": {
         "persistence": {
-          "mae": 0.9248399138450623,
-          "rmse": 1.161941647529602
+          "mae": 0.16833512485027313,
+          "rmse": 0.26526445150375366
         },
         "zero": {
-          "mae": 1.4034181833267212,
-          "rmse": 1.6620489358901978
+          "mae": 1.9611139297485352,
+          "rmse": 2.1116790771484375
         }
       },
       "stage_results_metrics": null
@@ -216,8 +246,8 @@
     {
       "stage_name": "pems08_zero_shot",
       "dataset_key": "PEMS08",
-      "input_len": 96,
-      "output_len": 96,
+      "input_len": 12,
+      "output_len": 12,
       "split": [
         0.7,
         0.1,
@@ -231,6 +261,12 @@
         170,
         3
       ],
+      "raw_value_global_stats": {
+        "min": 0.0,
+        "max": 1147.0,
+        "non_finite_frac": 0.0
+      },
+      "quality_warnings": [],
       "raw_value_ch0_stats": {
         "min": 0.0,
         "max": 1147.0,
@@ -244,9 +280,13 @@
         "scaler_type": "standard",
         "use_revin": true,
         "factost_original_scale": true,
-        "factost_split_requested": false
+        "factost_split_requested": true
       },
-      "factost_split_meta": {},
+      "factost_split_meta": {
+        "data_path": "/home/dhz/BasicSTFM/data/PEMS08/data.npz",
+        "used_desc": false,
+        "desc_path": "/home/dhz/BasicSTFM/data/PEMS08/desc.json"
+      },
       "split_lengths": {
         "train": 12499,
         "val": 1785,
@@ -257,29 +297,29 @@
         "std_ch0": 145.77810668945312
       },
       "revin_batch_after_normalize": {
-        "x_mean": 0.06140054762363434,
-        "x_std": 1.4908232688903809,
-        "y_mean": -1.5382806062698364,
-        "y_std": 2.3811261653900146
+        "x_mean": 0.041601795703172684,
+        "x_std": 1.6006965637207031,
+        "y_mean": -0.07958614081144333,
+        "y_std": 2.0297088623046875
       },
       "baselines_raw_space_ch_all": {
         "persistence": {
-          "mae": 38.28217315673828,
-          "rmse": 80.24671173095703
+          "mae": 8.351645469665527,
+          "rmse": 21.153635025024414
         },
         "zero": {
-          "mae": 60.8072624206543,
-          "rmse": 88.01664733886719
+          "mae": 131.45864868164062,
+          "rmse": 214.49429321289062
         }
       },
       "baselines_dataset_scaled_space": {
         "persistence": {
-          "mae": 0.5400350689888,
-          "rmse": 0.7849003672599792
+          "mae": 0.308149516582489,
+          "rmse": 0.6713749170303345
         },
         "zero": {
-          "mae": 3.8889269828796387,
-          "rmse": 5.924380302429199
+          "mae": 4.486586570739746,
+          "rmse": 5.451411724090576
         }
       },
       "stage_results_metrics": null
@@ -287,8 +327,8 @@
     {
       "stage_name": "etth2_zero_shot",
       "dataset_key": "ETTh2",
-      "input_len": 96,
-      "output_len": 96,
+      "input_len": 12,
+      "output_len": 12,
       "split": [
         0.7,
         0.1,
@@ -302,6 +342,12 @@
         7,
         1
       ],
+      "raw_value_global_stats": {
+        "min": -31.461999893188477,
+        "max": 107.89299774169922,
+        "non_finite_frac": 0.0
+      },
+      "quality_warnings": [],
       "raw_value_ch0_stats": {
         "min": -31.461999893188477,
         "max": 107.89299774169922,
@@ -315,9 +361,13 @@
         "scaler_type": "standard",
         "use_revin": true,
         "factost_original_scale": false,
-        "factost_split_requested": false
+        "factost_split_requested": true
       },
-      "factost_split_meta": {},
+      "factost_split_meta": {
+        "data_path": "/home/dhz/BasicSTFM/data/ETTh2/data.npz",
+        "used_desc": false,
+        "desc_path": "/home/dhz/BasicSTFM/data/ETTh2/desc.json"
+      },
       "split_lengths": {
         "train": 12194,
         "val": 1742,
@@ -328,29 +378,29 @@
         "std_ch0": 19.98343849182129
       },
       "revin_batch_after_normalize": {
-        "x_mean": -6.904204497004685e-07,
-        "x_std": 1.0,
-        "y_mean": -2.215399980545044,
-        "y_std": 2.2881240844726562
+        "x_mean": -2.1039019770796585e-07,
+        "x_std": 0.9559321999549866,
+        "y_mean": 0.17519663274288177,
+        "y_std": 1.3266654014587402
       },
       "baselines_raw_space_ch_all": {
         "persistence": {
-          "mae": 9.025877952575684,
-          "rmse": 12.530110359191895
+          "mae": 2.8339524269104004,
+          "rmse": 4.100920677185059
         },
         "zero": {
-          "mae": 11.666853904724121,
-          "rmse": 17.917320251464844
+          "mae": 15.78015422821045,
+          "rmse": 25.248958587646484
         }
       },
       "baselines_dataset_scaled_space": {
         "persistence": {
-          "mae": 0.4516678750514984,
-          "rmse": 0.6270247101783752
+          "mae": 0.14181505143642426,
+          "rmse": 0.20521597564220428
         },
         "zero": {
-          "mae": 0.5838261842727661,
-          "rmse": 0.8966084718704224
+          "mae": 0.789661705493927,
+          "rmse": 1.2634941339492798
         }
       },
       "stage_results_metrics": null
@@ -358,8 +408,8 @@
     {
       "stage_name": "pems_bay_zero_shot",
       "dataset_key": "PEMS-BAY",
-      "input_len": 96,
-      "output_len": 96,
+      "input_len": 12,
+      "output_len": 12,
       "split": [
         0.7,
         0.1,
@@ -373,6 +423,12 @@
         325,
         1
       ],
+      "raw_value_global_stats": {
+        "min": 0.0,
+        "max": 85.0999984741211,
+        "non_finite_frac": 0.0
+      },
+      "quality_warnings": [],
       "raw_value_ch0_stats": {
         "min": 0.0,
         "max": 85.0999984741211,
@@ -386,9 +442,13 @@
         "scaler_type": "standard",
         "use_revin": true,
         "factost_original_scale": true,
-        "factost_split_requested": false
+        "factost_split_requested": true
       },
-      "factost_split_meta": {},
+      "factost_split_meta": {
+        "data_path": "/home/dhz/BasicSTFM/data/PEMS-BAY/data.npz",
+        "used_desc": false,
+        "desc_path": "/home/dhz/BasicSTFM/data/PEMS-BAY/desc.json"
+      },
       "split_lengths": {
         "train": 36481,
         "val": 5211,
@@ -399,29 +459,29 @@
         "std_ch0": 9.4368314743042
       },
       "revin_batch_after_normalize": {
-        "x_mean": 2.6348310200319247e-08,
-        "x_std": 1.0,
-        "y_mean": -2.539442539215088,
-        "y_std": 5.604605674743652
+        "x_mean": 3.765790879128872e-08,
+        "x_std": 0.9831523895263672,
+        "y_mean": 0.5791890025138855,
+        "y_std": 2.7757036685943604
       },
       "baselines_raw_space_ch_all": {
         "persistence": {
-          "mae": 4.1469807624816895,
-          "rmse": 7.025230884552002
+          "mae": 1.7015899419784546,
+          "rmse": 4.306000709533691
         },
         "zero": {
-          "mae": 63.3378791809082,
-          "rmse": 63.677978515625
+          "mae": 65.8658447265625,
+          "rmse": 65.9941177368164
         }
       },
       "baselines_dataset_scaled_space": {
         "persistence": {
-          "mae": 0.4394463002681732,
-          "rmse": 0.7444480061531067
+          "mae": 0.18031367659568787,
+          "rmse": 0.45629727840423584
         },
         "zero": {
-          "mae": 6.71177339553833,
-          "rmse": 6.747813701629639
+          "mae": 6.979657173156738,
+          "rmse": 6.993249893188477
         }
       },
       "stage_results_metrics": null
@@ -429,8 +489,8 @@
     {
       "stage_name": "weather_tgt_zero_shot",
       "dataset_key": "Weather",
-      "input_len": 96,
-      "output_len": 96,
+      "input_len": 12,
+      "output_len": 12,
       "split": [
         0.7,
         0.1,
@@ -444,55 +504,65 @@
         21,
         1
       ],
-      "raw_value_ch0_stats": {
-        "min": -9999.0,
+      "raw_value_global_stats": {
+        "min": -13.8100004196167,
         "max": 2498.93994140625,
-        "mean": 188.893347021639,
-        "std": 368.23736440697724,
-        "p01": -0.38999998569488525,
-        "p50": 11.140000343322754,
-        "p99": 1264.698449707032
+        "non_finite_frac": 0.0
+      },
+      "quality_warnings": [],
+      "raw_value_ch0_stats": {
+        "min": -13.8100004196167,
+        "max": 2498.93994140625,
+        "mean": 189.69907867130524,
+        "std": 357.91490079558224,
+        "p01": -0.3700000047683716,
+        "p50": 11.149999618530273,
+        "p99": 1264.800048828125
       },
       "protocol": {
         "scaler_type": "standard",
         "use_revin": true,
         "factost_original_scale": false,
-        "factost_split_requested": false
+        "factost_split_requested": true
       },
-      "factost_split_meta": {},
+      "factost_split_meta": {
+        "data_path": "/home/dhz/BasicSTFM/data/Weather/data.npz",
+        "used_desc": false,
+        "desc_path": "/home/dhz/BasicSTFM/data/Weather/desc.json"
+      },
       "split_lengths": {
         "train": 36887,
         "val": 5269,
         "test": 10540
       },
       "standard_scaler": {
-        "mean_ch0": 195.80189514160156,
-        "std_ch0": 381.21234130859375
+        "mean_ch0": 196.95297241210938,
+        "std_ch0": 366.87652587890625
       },
       "revin_batch_after_normalize": {
-        "x_mean": -1.987058112717932e-06,
-        "x_std": 0.9511897563934326,
-        "y_mean": 802.8657836914062,
-        "y_std": 10423.509765625
+        "x_mean": 3.074842824801749e-09,
+        "x_std": 0.18417128920555115,
+        "y_mean": -0.18140266835689545,
+        "y_std": 1.521817684173584
       },
       "baselines_raw_space_ch_all": {
         "persistence": {
-          "mae": 50.65580749511719,
-          "rmse": 136.04518127441406
+          "mae": 5.511029243469238,
+          "rmse": 23.711400985717773
         },
         "zero": {
-          "mae": 174.7756805419922,
-          "rmse": 375.71612548828125
+          "mae": 153.298583984375,
+          "rmse": 367.9242248535156
         }
       },
       "baselines_dataset_scaled_space": {
         "persistence": {
-          "mae": 0.1328808218240738,
-          "rmse": 0.35687509179115295
+          "mae": 0.015021474100649357,
+          "rmse": 0.06463047116994858
         },
         "zero": {
-          "mae": 0.4584733545780182,
-          "rmse": 0.9855822324752808
+          "mae": 0.4178479015827179,
+          "rmse": 1.002855658531189
         }
       },
       "stage_results_metrics": null
@@ -500,8 +570,8 @@
     {
       "stage_name": "electricity_zero_shot",
       "dataset_key": "Electricity",
-      "input_len": 96,
-      "output_len": 96,
+      "input_len": 12,
+      "output_len": 12,
       "split": [
         0.7,
         0.1,
@@ -515,6 +585,12 @@
         321,
         1
       ],
+      "raw_value_global_stats": {
+        "min": 0.0,
+        "max": 764000.0,
+        "non_finite_frac": 0.0
+      },
+      "quality_warnings": [],
       "raw_value_ch0_stats": {
         "min": 0.0,
         "max": 764000.0,
@@ -528,9 +604,13 @@
         "scaler_type": "standard",
         "use_revin": true,
         "factost_original_scale": false,
-        "factost_split_requested": false
+        "factost_split_requested": true
       },
-      "factost_split_meta": {},
+      "factost_split_meta": {
+        "data_path": "/home/dhz/BasicSTFM/data/Electricity/data.npz",
+        "used_desc": false,
+        "desc_path": "/home/dhz/BasicSTFM/data/Electricity/desc.json"
+      },
       "split_lengths": {
         "train": 18412,
         "val": 2630,
@@ -541,29 +621,29 @@
         "std_ch0": 15048.111328125
       },
       "revin_batch_after_normalize": {
-        "x_mean": -9.102551302930806e-06,
-        "x_std": 0.9984411597251892,
-        "y_mean": 0.0517888106405735,
-        "y_std": 1.2890020608901978
+        "x_mean": -2.5995794405986317e-09,
+        "x_std": 0.47401320934295654,
+        "y_mean": 0.23620060086250305,
+        "y_std": 0.5126886963844299
       },
       "baselines_raw_space_ch_all": {
         "persistence": {
-          "mae": 1083.659912109375,
-          "rmse": 10113.306640625
+          "mae": 1243.729736328125,
+          "rmse": 9313.251953125
         },
         "zero": {
-          "mae": 2470.314453125,
-          "rmse": 14562.25390625
+          "mae": 2493.82373046875,
+          "rmse": 12821.935546875
         }
       },
       "baselines_dataset_scaled_space": {
         "persistence": {
-          "mae": 0.07201302796602249,
-          "rmse": 0.6720648407936096
+          "mae": 0.08265022188425064,
+          "rmse": 0.6188984513282776
         },
         "zero": {
-          "mae": 0.1641610860824585,
-          "rmse": 0.9677130579948425
+          "mae": 0.16572338342666626,
+          "rmse": 0.8520628213882446
         }
       },
       "stage_results_metrics": null

@@ -59,6 +59,7 @@ class StableResidualForecastingTask(Task):
         use_revin: bool = False,
         revin_value_channel: Union[int, Sequence[int]] = 0,
         revin_eps: float = 1e-5,
+        revin_scaled_std_floor: float = 0.05,
         revin_loss_space: str = "normalized",
         revin_metric_space: str = "raw",
         factost_original_scale: bool = False,
@@ -103,6 +104,7 @@ class StableResidualForecastingTask(Task):
         else:
             self.revin_value_channels = tuple(int(c) for c in revin_value_channel)
         self.revin_eps = float(revin_eps)
+        self.revin_scaled_std_floor = float(revin_scaled_std_floor)
 
         rls = str(revin_loss_space).lower().replace("-", "_")
         if rls not in {"normalized", "raw"}:
@@ -215,6 +217,7 @@ class StableResidualForecastingTask(Task):
                 batch,
                 value_channels=self.revin_value_channels,
                 eps=self.revin_eps,
+                scaled_std_floor=self.revin_scaled_std_floor,
             )
 
         outputs = model(
