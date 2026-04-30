@@ -594,6 +594,9 @@ pipeline:
         model_mode: forecast
         use_revin: true
         revin_value_channel: 0
+        revin_eps: 1e-5
+        revin_loss_space: normalized
+        revin_metric_space: raw
       losses:
         - type: mae
       metrics:
@@ -631,6 +634,9 @@ pipeline:
         model_mode: forecast
         use_revin: true
         revin_value_channel: 0
+        revin_eps: 1e-5
+        revin_loss_space: normalized
+        revin_metric_space: raw
         stable_target: lowfreq
         final_weight: 1.0
         stable_weight: 0.2
@@ -756,6 +762,9 @@ pipeline:
         model_mode: forecast
         use_revin: true
         revin_value_channel: 0
+        revin_eps: 1e-5
+        revin_loss_space: normalized
+        revin_metric_space: raw
       losses:
         - type: mae
       metrics:
@@ -793,6 +802,9 @@ pipeline:
         model_mode: forecast
         use_revin: true
         revin_value_channel: 0
+        revin_eps: 1e-5
+        revin_loss_space: normalized
+        revin_metric_space: raw
         stable_target: lowfreq
         final_weight: 1.0
         stable_weight: 0.2
@@ -840,6 +852,9 @@ pipeline:
         model_mode: forecast
         use_revin: true
         revin_value_channel: 0
+        revin_eps: 1e-5
+        revin_loss_space: normalized
+        revin_metric_space: raw
       losses:
         - type: mae
       metrics:
@@ -877,6 +892,9 @@ pipeline:
         model_mode: forecast
         use_revin: true
         revin_value_channel: 0
+        revin_eps: 1e-5
+        revin_loss_space: normalized
+        revin_metric_space: raw
         stable_target: lowfreq
         final_weight: 1.0
         stable_weight: 0.2

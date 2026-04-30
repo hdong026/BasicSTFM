@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Inspect Electricity npz layout, global z-score vs RevIN batch stats, and numeric health."""
+"""Inspect Electricity npz layout, global z-score vs RevIN batch stats, and numeric sanity."""
 
 from __future__ import annotations
 
@@ -25,6 +25,7 @@ def main() -> int:
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--input-len", type=int, default=96)
     parser.add_argument("--output-len", type=int, default=96)
+    parser.add_argument("--value-channel", type=int, default=0)
     args = parser.parse_args()
     root = _repo_root()
     data_path = args.data_path or (root / "data" / "Electricity" / "data.npz")
@@ -37,37 +38,66 @@ def main() -> int:
     print("npz keys:", keys)
     data = z["data"] if "data" in z.files else z[z.files[0]]
     print("array used:", "data" if "data" in z.files else z.files[0])
-    print("shape:", data.shape, "dtype:", data.dtype)
+    print("shape (expect [T, N, C]):", data.shape, "dtype:", data.dtype)
 
     if data.ndim != 3:
         print("Expected [T, N, C] array; got ndim=", data.ndim)
         return 1
-    t_max, n, c = data.shape
-    is_t_n_1 = c == 1
-    print("layout looks like [T,N,1]:", is_t_n_1, "(C=%d)" % c)
+    vc = int(args.value_channel)
+    if vc < 0 or vc >= data.shape[-1]:
+        print(f"value_channel {vc} out of range for C={data.shape[-1]}", file=sys.stderr)
+        return 1
 
-    # Global standard (train-style): channel-wise axis (0,1)
-    mu_g = data.mean(axis=(0, 1), keepdims=True)
-    sg_g = data.std(axis=(0, 1), keepdims=True) + 1e-5
-    per_node_mu = data.mean(axis=0)
-    per_node_std = data.std(axis=0) + 1e-5
-    print("global scaler mean shape", mu_g.shape, "vals", mu_g.reshape(-1)[: min(8, mu_g.size)])
+    t_max, n_nodes, c = data.shape
+    finite = np.isfinite(data).all()
+    print("all finite:", finite)
+    if not finite:
+        print("non-finite count:", int(np.size(data) - np.isfinite(data).sum()))
+
+    # Global standard (dataset-level): channel-wise over time + nodes
+    mu_g = np.nanmean(np.where(np.isfinite(data), data, np.nan), axis=(0, 1), keepdims=True)
+    sg_g = np.nanstd(np.where(np.isfinite(data), data, np.nan), axis=(0, 1), keepdims=True)
+    sg_g = np.maximum(sg_g, 1e-5)
+    print("global scaler mean (first channels):", mu_g.reshape(-1)[: min(8, mu_g.size)])
+    print("global scaler std (first channels):", sg_g.reshape(-1)[: min(8, sg_g.size)])
+
+    per_node_mu = data[:, :, vc].mean(axis=0)
+    per_node_std = data[:, :, vc].std(axis=0) + 1e-5
     print(
-        "per-node mean: min/med/max",
+        "per-node mean (value ch=%d): min / p10 / median / p90 / max ="
+        % vc,
         float(np.min(per_node_mu)),
+        float(np.quantile(per_node_mu, 0.1)),
         float(np.median(per_node_mu)),
+        float(np.quantile(per_node_mu, 0.9)),
         float(np.max(per_node_mu)),
     )
     print(
-        "per-node std: min/med/max",
+        "per-node std (value ch=%d): min / p10 / median / p90 / max ="
+        % vc,
         float(np.min(per_node_std)),
+        float(np.quantile(per_node_std, 0.1)),
         float(np.median(per_node_std)),
+        float(np.quantile(per_node_std, 0.9)),
         float(np.max(per_node_std)),
     )
 
-    # Synthetic batch windows (deterministic offsets)
+    g_std = float(sg_g.reshape(-1)[vc])
+    ratio = per_node_std / g_std
+    print(
+        "global-standard vs per-node std (ch=%d): per_node_std / global_std —"
+        " min / median / max =" % vc,
+        float(np.min(ratio)),
+        float(np.median(ratio)),
+        float(np.max(ratio)),
+    )
+
+    q = np.quantile(data[:, :, vc], [0.0, 0.01, 0.5, 0.99, 1.0])
+    print("raw value-channel quantiles [min,1%,50%,99%,max]:", q.tolist())
+
     in_len = int(args.input_len)
-    hi = t_max - in_len - int(args.output_len)
+    out_len = int(args.output_len)
+    hi = t_max - in_len - out_len
     bs = min(int(args.batch_size), max(1, hi))
     if hi < 1:
         print("Time series too short for windowing; T=", t_max)
@@ -75,28 +105,27 @@ def main() -> int:
     rng = np.random.default_rng(0)
     starts = rng.choice(np.arange(0, hi), size=bs, replace=False)
     xb = np.stack([data[s : s + in_len] for s in starts], axis=0)
-    yb = np.stack(
-        [data[s + in_len : s + in_len + int(args.output_len)] for s in starts],
-        axis=0,
-    )
-    # [B,T,N,C]
-    xv = xb[..., 0]
+    # [B, T, N, C]
+    xv = xb[..., vc]
     mean_b = xv.mean(axis=1, keepdims=True)
     std_b = xv.std(axis=1, keepdims=True) + 1e-5
-    print("RevIN batch mean shape", mean_b.shape)
+    x_norm = (xv - mean_b) / std_b
+    # After RevIN, stats along time per (batch, node)
+    m_after = x_norm.mean(axis=1)
+    s_after = x_norm.std(axis=1)
+    print("RevIN-normalized input windows (ch=%d):" % vc)
     print(
-        "RevIN std (ch0) across batch: min/med/max",
-        float(np.min(std_b)),
-        float(np.median(std_b)),
-        float(np.max(std_b)),
+        "  mean over T: abs max / median abs =",
+        float(np.max(np.abs(m_after))),
+        float(np.median(np.abs(m_after))),
     )
-
-    finite = np.isfinite(data).all()
-    print("all finite:", finite)
-    if not finite:
-        print("non-finite count:", int(np.size(data) - np.isfinite(data).sum()))
-    q = np.quantile(data, [0.0, 0.01, 0.5, 0.99, 1.0])
-    print("raw quantiles [min,1%,50%,99%,max]:", q.tolist())
+    print(
+        "  std over T: min / median / max =",
+        float(np.min(s_after)),
+        float(np.median(s_after)),
+        float(np.max(s_after)),
+    )
+    print("(expect mean ~0 and std ~1 per window after FactoST-style RevIN.)")
     return 0
 
 

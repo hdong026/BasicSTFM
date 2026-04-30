@@ -59,6 +59,8 @@ class StableResidualForecastingTask(Task):
         use_revin: bool = False,
         revin_value_channel: Union[int, Sequence[int]] = 0,
         revin_eps: float = 1e-5,
+        revin_loss_space: str = "normalized",
+        revin_metric_space: str = "raw",
     ) -> None:
         self.input_key = input_key
         self.target_key = target_key
@@ -100,8 +102,19 @@ class StableResidualForecastingTask(Task):
         else:
             self.revin_value_channels = tuple(int(c) for c in revin_value_channel)
         self.revin_eps = float(revin_eps)
-        #: Logged once per stage build in ``MultiStageTrainer`` when RevIN targets are enabled.
-        self.scaling_protocol: Optional[str] = "factost_revin_value" if self.use_revin else None
+
+        rls = str(revin_loss_space).lower().replace("-", "_")
+        if rls not in {"normalized", "raw"}:
+            raise ValueError("revin_loss_space must be 'normalized' or 'raw'")
+        self.revin_loss_space = rls
+
+        rms = str(revin_metric_space).lower().replace("-", "_")
+        if rms not in {"normalized", "raw"}:
+            raise ValueError("revin_metric_space must be 'normalized' or 'raw'")
+        self.revin_metric_space = rms
+
+        #: Logged once per stage start in ``MultiStageTrainer`` when RevIN targets are enabled.
+        self.scale_protocol: Optional[str] = "factost_revin_value" if self.use_revin else None
 
     def _phase_weights(self) -> tuple[float, float, float, float]:
         if self.phase == "stable":
@@ -238,8 +251,12 @@ class StableResidualForecastingTask(Task):
             pred_denorm, raw_target, raw_mask
         )
 
-        use_norm_main = self.use_revin or self.primary_supervision_space == "normalized"
-        if use_norm_main:
+        if self.use_revin:
+            if self.revin_loss_space == "normalized":
+                main_loss_out = losses(y_hat_scaled, y_scaled, mask=loss_mask)
+            else:
+                main_loss_out = losses(pred_denorm, target_denorm, mask=metric_mask)
+        elif self.primary_supervision_space == "normalized":
             main_loss_out = losses(y_hat_scaled, y_scaled, mask=loss_mask)
         else:
             main_loss_out = losses(pred_denorm, target_denorm, mask=metric_mask)
@@ -264,15 +281,33 @@ class StableResidualForecastingTask(Task):
 
         logs: Dict[str, torch.Tensor] = dict(main_loss_out["logs"])
         if self.use_revin:
-            for lk, lv in list(logs.items()):
-                if lk.startswith("loss/") and lk != "loss/total":
-                    logs[f"{lk}_norm"] = lv
-
-        with torch.no_grad():
-            if self.primary_supervision_space == "normalized" or self.use_revin:
-                logs["metric/raw_mae"] = _scalar_masked_mean(
+            rm = batch["revin_mean"]
+            rs = batch["revin_std"]
+            logs["revin/mean_abs"] = rm.abs().mean()
+            logs["revin/std_mean"] = rs.mean()
+            if self.revin_loss_space == "normalized":
+                if "loss/mae" in logs:
+                    logs["loss/mae_norm"] = logs["loss/mae"]
+                if "loss/mse" in logs:
+                    logs["loss/mse_norm"] = logs["loss/mse"]
+            with torch.no_grad():
+                logs["metric/mae_raw"] = _scalar_masked_mean(
                     (pred_denorm - target_denorm).abs(),
                     metric_mask,
+                )
+                sq = (pred_denorm - target_denorm).pow(2)
+                logs["metric/rmse_raw"] = torch.sqrt(
+                    _scalar_masked_mean(sq, metric_mask).clamp_min(1e-12)
+                )
+        elif self.primary_supervision_space == "normalized":
+            with torch.no_grad():
+                logs["metric/mae_raw"] = _scalar_masked_mean(
+                    (pred_denorm - target_denorm).abs(),
+                    metric_mask,
+                )
+                sq = (pred_denorm - target_denorm).pow(2)
+                logs["metric/rmse_raw"] = torch.sqrt(
+                    _scalar_masked_mean(sq, metric_mask).clamp_min(1e-12)
                 )
 
         if self.log_aux_losses:
@@ -330,19 +365,27 @@ class StableResidualForecastingTask(Task):
         logs["loss/total"] = total.detach()
 
         if self.use_revin:
-            metric_pred = pred_denorm.detach()
-            metric_target = target_denorm.detach()
+            if self.revin_metric_space == "raw":
+                metric_pred = pred_denorm.detach()
+                metric_target = target_denorm.detach()
+                out_mask = metric_mask
+            else:
+                metric_pred = y_hat_scaled.detach()
+                metric_target = y_scaled.detach()
+                out_mask = loss_mask
         elif self.primary_supervision_space == "normalized":
             metric_pred = y_hat_scaled.detach()
             metric_target = y_scaled.detach()
+            out_mask = loss_mask
         else:
             metric_pred = pred_denorm.detach()
             metric_target = target_denorm.detach()
+            out_mask = metric_mask
 
         return {
             "loss": total,
             "logs": logs,
             "pred": metric_pred,
             "target": metric_target,
-            "mask": None if metric_mask is None else metric_mask.detach(),
+            "mask": None if out_mask is None else out_mask.detach(),
         }
