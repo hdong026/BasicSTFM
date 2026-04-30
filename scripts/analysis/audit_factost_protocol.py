@@ -4,7 +4,9 @@
 Run from BasicSTFM repo root ( paths like ``data/METR-LA/data.npz`` resolve relative to cwd )::
 
     python scripts/analysis/audit_factost_protocol.py \\
-        configs/monash/dpm_sr_monash15_then_traffic_sharded_transfer_12_factost_protocol.yaml
+        configs/monash/dpm_sr_monash15_then_traffic_sharded_transfer_96_factost_protocol.yaml
+
+Use ``--json-only`` for machine-readable output without the human summary.
 """
 
 from __future__ import annotations
@@ -20,6 +22,19 @@ import numpy as np
 import torch
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+# Downstream datasets that should use FactoST-style RevIN when comparing to FactoST benchmarks.
+FACTOST_EXPECT_USE_REVIN: Tuple[str, ...] = (
+    "METR-LA",
+    "PEMS03",
+    "PEMS04",
+    "PEMS07",
+    "PEMS08",
+    "PEMS-BAY",
+    "ETTh2",
+    "Weather",
+    "Electricity",
+)
 
 
 def _ensure_repo_on_path() -> None:
@@ -236,14 +251,31 @@ def _extract_latest_metrics(payload: Dict[str, Any], *, label: str) -> Dict[str,
             "test/metric/mae",
             "test/metric/rmse",
             "test/metric/mae_norm",
+            "test/metric/rmse_norm",
             "test/metric/mae_original",
+            "test/metric/rmse_original",
             "test/metric/mae_revin_raw",
+            "test/metric/rmse_revin_raw",
         )
         for k in keys:
             if k in test_block:
                 out[k] = test_block[k]
         break
     return out
+
+
+def _primary_mae_mapping(*, use_revin: bool, factost_original_scale: bool) -> str:
+    if not use_revin:
+        return "metric/mae on dataset scaler outputs (no RevIN path)"
+    if factost_original_scale:
+        return (
+            "metric/mae_original / inverse RevIN + inverse dataset scaler "
+            "(FactoST original_scale=1)"
+        )
+    return (
+        "metric/mae_revin_raw / inverse RevIN only, still in dataset-standardized space "
+        "(FactoST original_scale=0)"
+    )
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -256,6 +288,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         help="Optional stage_results.json to pull logged dual metrics",
     )
     parser.add_argument("--cwd", default=str(REPO_ROOT), help="Working directory for relative data paths")
+    parser.add_argument(
+        "--json-only",
+        action="store_true",
+        help="Print only the JSON payload (skip human-readable summary / warnings preamble)",
+    )
     args = parser.parse_args(argv)
 
     os.chdir(args.cwd)
@@ -266,23 +303,36 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     cfg = load_config(args.config)
     audit_rows = StagePlan.describe_factost_protocol_audit(cfg)
 
-    targets: List[Dict[str, Any]] = []
-    seen = set()
+    eval_targets: List[Dict[str, Any]] = []
     for row in audit_rows:
         if not row.get("eval_only"):
             continue
-        if not row.get("use_revin"):
-            continue
-        dp = row.get("data_path")
-        dk = row.get("dataset_key")
-        if not dp or dk in seen:
-            continue
-        seen.add(dk)
-        targets.append(row)
+        eval_targets.append(row)
 
-    reports = []
+    reports: List[Dict[str, Any]] = []
     cfg_fallback = cfg.get("data", {})
-    for row in targets:
+    warnings: List[str] = []
+
+    for row in eval_targets:
+        dk = row.get("dataset_key")
+        if dk in FACTOST_EXPECT_USE_REVIN and not row.get("use_revin"):
+            warnings.append(
+                f"WARNING: stage={row.get('name')!r} dataset_key={dk!r} should align with FactoST "
+                f"benchmarks but task.use_revin is false."
+            )
+
+        dp = row.get("data_path")
+        if not dp:
+            reports.append(
+                {
+                    "stage_name": row.get("name"),
+                    "dataset_key": dk,
+                    "error": "missing data_path after merge",
+                    "protocol_row": row,
+                }
+            )
+            continue
+
         il = row.get("input_len") or cfg_fallback.get("input_len")
         ol = row.get("output_len") or cfg_fallback.get("output_len")
         if il is None or ol is None:
@@ -290,22 +340,57 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             ol = cfg["pipeline"]["stages"][0].get("data", {}).get("output_len")
         split = tuple(row.get("split") or cfg_fallback.get("split", (0.7, 0.1, 0.2)))
 
+        detail = _report_dataset(
+            label=str(row.get("dataset_key")),
+            data_path=str(dp),
+            input_len=int(il),
+            output_len=int(ol),
+            split=split,
+            factost_split=bool(row.get("factost_split")),
+            scaler_type=str(row.get("data_scaler_type") or "standard"),
+            use_revin=bool(row.get("use_revin")),
+            factost_original_scale=bool(row.get("factost_original_scale")),
+            stage_results_path=args.stage_results,
+        )
         reports.append(
-            _report_dataset(
-                label=str(row.get("dataset_key")),
-                data_path=str(row["data_path"]),
-                input_len=int(il),
-                output_len=int(ol),
-                split=split,
-                factost_split=bool(row.get("factost_split")),
-                scaler_type=str(row.get("data_scaler_type") or "standard"),
-                use_revin=bool(row.get("use_revin")),
-                factost_original_scale=bool(row.get("factost_original_scale")),
-                stage_results_path=args.stage_results,
-            )
+            {
+                "stage_name": row.get("name"),
+                "dataset_key": dk,
+                "input_len": il,
+                "output_len": ol,
+                "split": list(split),
+                "test_metric_mae_maps_to": _primary_mae_mapping(
+                    use_revin=bool(row.get("use_revin")),
+                    factost_original_scale=bool(row.get("factost_original_scale")),
+                ),
+                **detail,
+            }
         )
 
-    print(json.dumps({"targets": reports}, indent=2, ensure_ascii=False))
+    payload = {"targets": reports, "warnings": warnings}
+
+    if not args.json_only:
+        print("=== FactoST protocol audit (eval_only stages) ===")
+        print(f"config: {args.config}")
+        if warnings:
+            for w in warnings:
+                print(w)
+        else:
+            print("(no FactoST RevIN expectation warnings)")
+        for item in reports:
+            if "error" in item:
+                print(f"- {item.get('stage_name')}: ERROR {item['error']}")
+                continue
+            prot = item.get("protocol", {})
+            print(
+                f"- {item.get('stage_name')} | dataset_key={item.get('dataset_key')} | "
+                f"scaler={prot.get('scaler_type')} use_revin={prot.get('use_revin')} "
+                f"factost_original_scale={prot.get('factost_original_scale')}"
+            )
+            print(f"    test/metric/mae → {item.get('test_metric_mae_maps_to')}")
+        print()
+
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
     return 0
 
 

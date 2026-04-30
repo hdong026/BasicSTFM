@@ -120,7 +120,8 @@ class StableResidualForecastingTask(Task):
         if self.use_revin:
             self.scale_protocol = (
                 "factost_revin_value|factost_original_scale="
-                f"{self.factost_original_scale}|revin_metric_space={self.revin_metric_space}"
+                f"{self.factost_original_scale}|primary_test_metric="
+                f"{'original' if self.factost_original_scale else 'revin_raw'}"
             )
         else:
             self.scale_protocol = None
@@ -260,6 +261,16 @@ class StableResidualForecastingTask(Task):
             pred_denorm, raw_target, raw_mask
         )
 
+        revin_rr_pred: Optional[torch.Tensor] = None
+        revin_rr_tgt: Optional[torch.Tensor] = None
+        revin_rr_mask: Any = None
+        if self.use_revin:
+            y_hat_rr_u = factost_value_revin_inverse(y_hat_scaled.detach(), batch)
+            y_tgt_rr_u = factost_value_revin_inverse(y_scaled.detach(), batch)
+            revin_rr_pred, revin_rr_tgt, revin_rr_mask = self._align_pred_target(
+                y_hat_rr_u, y_tgt_rr_u, loss_mask
+            )
+
         if self.use_revin:
             if self.revin_loss_space == "normalized":
                 main_loss_out = losses(y_hat_scaled, y_scaled, mask=loss_mask)
@@ -306,13 +317,12 @@ class StableResidualForecastingTask(Task):
                 logs["metric/rmse_norm"] = torch.sqrt(
                     _scalar_masked_mean(sq_norm, loss_mask).clamp_min(1e-12)
                 )
-                y_hat_rr = factost_value_revin_inverse(y_hat_scaled.detach(), batch)
-                y_tgt_rr = factost_value_revin_inverse(y_scaled.detach(), batch)
-                err_rr = (y_hat_rr - y_tgt_rr).abs()
-                sq_rr = (y_hat_rr - y_tgt_rr).pow(2)
-                logs["metric/mae_revin_raw"] = _scalar_masked_mean(err_rr, loss_mask)
+                assert revin_rr_pred is not None and revin_rr_tgt is not None
+                err_rr = (revin_rr_pred - revin_rr_tgt).abs()
+                sq_rr = (revin_rr_pred - revin_rr_tgt).pow(2)
+                logs["metric/mae_revin_raw"] = _scalar_masked_mean(err_rr, revin_rr_mask)
                 logs["metric/rmse_revin_raw"] = torch.sqrt(
-                    _scalar_masked_mean(sq_rr, loss_mask).clamp_min(1e-12)
+                    _scalar_masked_mean(sq_rr, revin_rr_mask).clamp_min(1e-12)
                 )
                 logs["metric/mae_original"] = _scalar_masked_mean(
                     (pred_denorm - target_denorm).abs(),
@@ -322,8 +332,6 @@ class StableResidualForecastingTask(Task):
                 logs["metric/rmse_original"] = torch.sqrt(
                     _scalar_masked_mean(sq_o, metric_mask).clamp_min(1e-12)
                 )
-                logs["metric/mae_raw"] = logs["metric/mae_original"]
-                logs["metric/rmse_raw"] = logs["metric/rmse_original"]
         elif self.primary_supervision_space == "normalized":
             with torch.no_grad():
                 logs["metric/mae_raw"] = _scalar_masked_mean(
@@ -390,15 +398,15 @@ class StableResidualForecastingTask(Task):
         logs["loss/total"] = total.detach()
 
         if self.use_revin:
-            report_original = self.factost_original_scale or self.revin_metric_space == "raw"
-            if report_original:
+            assert revin_rr_pred is not None and revin_rr_tgt is not None
+            if self.factost_original_scale:
                 metric_pred = pred_denorm.detach()
                 metric_target = target_denorm.detach()
                 out_mask = metric_mask
             else:
-                metric_pred = factost_value_revin_inverse(y_hat_scaled.detach(), batch)
-                metric_target = factost_value_revin_inverse(y_scaled.detach(), batch)
-                out_mask = loss_mask
+                metric_pred = revin_rr_pred
+                metric_target = revin_rr_tgt
+                out_mask = revin_rr_mask
         elif self.primary_supervision_space == "normalized":
             metric_pred = y_hat_scaled.detach()
             metric_target = y_scaled.detach()

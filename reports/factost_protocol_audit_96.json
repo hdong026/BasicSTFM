@@ -1,0 +1,593 @@
+=== FactoST protocol audit (eval_only stages) ===
+config: configs/monash/dpm_sr_monash15_then_traffic_sharded_transfer_96_factost_protocol.yaml
+(no FactoST RevIN expectation warnings)
+- metr_la_zero_shot | dataset_key=METR-LA | scaler=standard use_revin=True factost_original_scale=True
+    test/metric/mae → metric/mae_original / inverse RevIN + inverse dataset scaler (FactoST original_scale=1)
+- pems04_zero_shot | dataset_key=PEMS04 | scaler=standard use_revin=True factost_original_scale=True
+    test/metric/mae → metric/mae_original / inverse RevIN + inverse dataset scaler (FactoST original_scale=1)
+- pems07_zero_shot | dataset_key=PEMS07 | scaler=standard use_revin=True factost_original_scale=True
+    test/metric/mae → metric/mae_original / inverse RevIN + inverse dataset scaler (FactoST original_scale=1)
+- pems08_zero_shot | dataset_key=PEMS08 | scaler=standard use_revin=True factost_original_scale=True
+    test/metric/mae → metric/mae_original / inverse RevIN + inverse dataset scaler (FactoST original_scale=1)
+- etth2_zero_shot | dataset_key=ETTh2 | scaler=standard use_revin=True factost_original_scale=False
+    test/metric/mae → metric/mae_revin_raw / inverse RevIN only, still in dataset-standardized space (FactoST original_scale=0)
+- pems_bay_zero_shot | dataset_key=PEMS-BAY | scaler=standard use_revin=True factost_original_scale=True
+    test/metric/mae → metric/mae_original / inverse RevIN + inverse dataset scaler (FactoST original_scale=1)
+- weather_tgt_zero_shot | dataset_key=Weather | scaler=standard use_revin=True factost_original_scale=False
+    test/metric/mae → metric/mae_revin_raw / inverse RevIN only, still in dataset-standardized space (FactoST original_scale=0)
+- electricity_zero_shot | dataset_key=Electricity | scaler=standard use_revin=True factost_original_scale=False
+    test/metric/mae → metric/mae_revin_raw / inverse RevIN only, still in dataset-standardized space (FactoST original_scale=0)
+
+{
+  "targets": [
+    {
+      "stage_name": "metr_la_zero_shot",
+      "dataset_key": "METR-LA",
+      "input_len": 96,
+      "output_len": 96,
+      "split": [
+        0.7,
+        0.1,
+        0.2
+      ],
+      "test_metric_mae_maps_to": "metric/mae_original / inverse RevIN + inverse dataset scaler (FactoST original_scale=1)",
+      "label": "METR-LA",
+      "data_path": "data/METR-LA/data.npz",
+      "shape_TNC": [
+        34272,
+        207,
+        1
+      ],
+      "raw_value_ch0_stats": {
+        "min": 0.0,
+        "max": 70.0,
+        "mean": 53.71902111364029,
+        "std": 20.261430795576672,
+        "p01": 0.0,
+        "p50": 62.44444274902344,
+        "p99": 69.66666412353516
+      },
+      "protocol": {
+        "scaler_type": "standard",
+        "use_revin": true,
+        "factost_original_scale": true,
+        "factost_split_requested": false
+      },
+      "factost_split_meta": {},
+      "split_lengths": {
+        "train": 23990,
+        "val": 3427,
+        "test": 6855
+      },
+      "standard_scaler": {
+        "mean_ch0": 54.40589141845703,
+        "std_ch0": 19.49424934387207
+      },
+      "revin_batch_after_normalize": {
+        "x_mean": 0.00011518266546772793,
+        "x_std": 0.9975829720497131,
+        "y_mean": -3.0190587043762207,
+        "y_std": 8.181092262268066
+      },
+      "baselines_raw_space_ch_all": {
+        "persistence": {
+          "mae": 14.399867057800293,
+          "rmse": 24.75221061706543
+        },
+        "zero": {
+          "mae": 48.27679443359375,
+          "rmse": 53.4888801574707
+        }
+      },
+      "baselines_dataset_scaled_space": {
+        "persistence": {
+          "mae": 0.7386726140975952,
+          "rmse": 1.2697186470031738
+        },
+        "zero": {
+          "mae": 2.4764633178710938,
+          "rmse": 2.743828535079956
+        }
+      },
+      "stage_results_metrics": null
+    },
+    {
+      "stage_name": "pems04_zero_shot",
+      "dataset_key": "PEMS04",
+      "input_len": 96,
+      "output_len": 96,
+      "split": [
+        0.7,
+        0.1,
+        0.2
+      ],
+      "test_metric_mae_maps_to": "metric/mae_original / inverse RevIN + inverse dataset scaler (FactoST original_scale=1)",
+      "label": "PEMS04",
+      "data_path": "data/PEMS04/data.npz",
+      "shape_TNC": [
+        16992,
+        307,
+        3
+      ],
+      "raw_value_ch0_stats": {
+        "min": 0.0,
+        "max": 919.0,
+        "mean": 211.7007794815878,
+        "std": 158.06843264852427,
+        "p01": 0.0,
+        "p50": 180.0,
+        "p99": 632.0
+      },
+      "protocol": {
+        "scaler_type": "standard",
+        "use_revin": true,
+        "factost_original_scale": true,
+        "factost_split_requested": false
+      },
+      "factost_split_meta": {},
+      "split_lengths": {
+        "train": 11894,
+        "val": 1699,
+        "test": 3399
+      },
+      "standard_scaler": {
+        "mean_ch0": 208.5473175048828,
+        "std_ch0": 157.0738525390625
+      },
+      "revin_batch_after_normalize": {
+        "x_mean": 0.09431440383195877,
+        "x_std": 0.8665874004364014,
+        "y_mean": 0.4135780930519104,
+        "y_std": 0.982740581035614
+      },
+      "baselines_raw_space_ch_all": {
+        "persistence": {
+          "mae": 20.216196060180664,
+          "rmse": 46.59525680541992
+        },
+        "zero": {
+          "mae": 122.65601348876953,
+          "rmse": 197.22998046875
+        }
+      },
+      "baselines_dataset_scaled_space": {
+        "persistence": {
+          "mae": 0.4671214818954468,
+          "rmse": 0.9501825571060181
+        },
+        "zero": {
+          "mae": 3.6763572692871094,
+          "rmse": 4.726011753082275
+        }
+      },
+      "stage_results_metrics": null
+    },
+    {
+      "stage_name": "pems07_zero_shot",
+      "dataset_key": "PEMS07",
+      "input_len": 96,
+      "output_len": 96,
+      "split": [
+        0.7,
+        0.1,
+        0.2
+      ],
+      "test_metric_mae_maps_to": "metric/mae_original / inverse RevIN + inverse dataset scaler (FactoST original_scale=1)",
+      "label": "PEMS07",
+      "data_path": "data/PEMS07/data.npz",
+      "shape_TNC": [
+        28224,
+        883,
+        1
+      ],
+      "raw_value_ch0_stats": {
+        "min": 0.0,
+        "max": 1498.0,
+        "mean": 308.52346223738647,
+        "std": 188.24574174550935,
+        "p01": 7.0,
+        "p50": 304.0,
+        "p99": 748.0
+      },
+      "protocol": {
+        "scaler_type": "standard",
+        "use_revin": true,
+        "factost_original_scale": true,
+        "factost_split_requested": false
+      },
+      "factost_split_meta": {},
+      "split_lengths": {
+        "train": 19756,
+        "val": 2822,
+        "test": 5646
+      },
+      "standard_scaler": {
+        "mean_ch0": 308.4331359863281,
+        "std_ch0": 188.78733825683594
+      },
+      "revin_batch_after_normalize": {
+        "x_mean": 5.4030744649935514e-05,
+        "x_std": 0.9994348883628845,
+        "y_mean": -3.1406264305114746,
+        "y_std": 3.1528592109680176
+      },
+      "baselines_raw_space_ch_all": {
+        "persistence": {
+          "mae": 174.5980682373047,
+          "rmse": 219.35986328125
+        },
+        "zero": {
+          "mae": 264.9476318359375,
+          "rmse": 313.7738037109375
+        }
+      },
+      "baselines_dataset_scaled_space": {
+        "persistence": {
+          "mae": 0.9248399138450623,
+          "rmse": 1.161941647529602
+        },
+        "zero": {
+          "mae": 1.4034181833267212,
+          "rmse": 1.6620489358901978
+        }
+      },
+      "stage_results_metrics": null
+    },
+    {
+      "stage_name": "pems08_zero_shot",
+      "dataset_key": "PEMS08",
+      "input_len": 96,
+      "output_len": 96,
+      "split": [
+        0.7,
+        0.1,
+        0.2
+      ],
+      "test_metric_mae_maps_to": "metric/mae_original / inverse RevIN + inverse dataset scaler (FactoST original_scale=1)",
+      "label": "PEMS08",
+      "data_path": "data/PEMS08/data.npz",
+      "shape_TNC": [
+        17856,
+        170,
+        3
+      ],
+      "raw_value_ch0_stats": {
+        "min": 0.0,
+        "max": 1147.0,
+        "mean": 230.68069424678473,
+        "std": 146.2169577939448,
+        "p01": 4.0,
+        "p50": 215.0,
+        "p99": 590.0
+      },
+      "protocol": {
+        "scaler_type": "standard",
+        "use_revin": true,
+        "factost_original_scale": true,
+        "factost_split_requested": false
+      },
+      "factost_split_meta": {},
+      "split_lengths": {
+        "train": 12499,
+        "val": 1785,
+        "test": 3572
+      },
+      "standard_scaler": {
+        "mean_ch0": 230.18234252929688,
+        "std_ch0": 145.77810668945312
+      },
+      "revin_batch_after_normalize": {
+        "x_mean": 0.06140054762363434,
+        "x_std": 1.4908232688903809,
+        "y_mean": -1.5382806062698364,
+        "y_std": 2.3811261653900146
+      },
+      "baselines_raw_space_ch_all": {
+        "persistence": {
+          "mae": 38.28217315673828,
+          "rmse": 80.24671173095703
+        },
+        "zero": {
+          "mae": 60.8072624206543,
+          "rmse": 88.01664733886719
+        }
+      },
+      "baselines_dataset_scaled_space": {
+        "persistence": {
+          "mae": 0.5400350689888,
+          "rmse": 0.7849003672599792
+        },
+        "zero": {
+          "mae": 3.8889269828796387,
+          "rmse": 5.924380302429199
+        }
+      },
+      "stage_results_metrics": null
+    },
+    {
+      "stage_name": "etth2_zero_shot",
+      "dataset_key": "ETTh2",
+      "input_len": 96,
+      "output_len": 96,
+      "split": [
+        0.7,
+        0.1,
+        0.2
+      ],
+      "test_metric_mae_maps_to": "metric/mae_revin_raw / inverse RevIN only, still in dataset-standardized space (FactoST original_scale=0)",
+      "label": "ETTh2",
+      "data_path": "data/ETTh2/data.npz",
+      "shape_TNC": [
+        17420,
+        7,
+        1
+      ],
+      "raw_value_ch0_stats": {
+        "min": -31.461999893188477,
+        "max": 107.89299774169922,
+        "mean": 16.99768046897331,
+        "std": 19.616704437874684,
+        "p01": -12.270999908447266,
+        "p50": 11.416000366210938,
+        "p99": 59.62194122314456
+      },
+      "protocol": {
+        "scaler_type": "standard",
+        "use_revin": true,
+        "factost_original_scale": false,
+        "factost_split_requested": false
+      },
+      "factost_split_meta": {},
+      "split_lengths": {
+        "train": 12194,
+        "val": 1742,
+        "test": 3484
+      },
+      "standard_scaler": {
+        "mean_ch0": 18.582990646362305,
+        "std_ch0": 19.98343849182129
+      },
+      "revin_batch_after_normalize": {
+        "x_mean": -6.904204497004685e-07,
+        "x_std": 1.0,
+        "y_mean": -2.215399980545044,
+        "y_std": 2.2881240844726562
+      },
+      "baselines_raw_space_ch_all": {
+        "persistence": {
+          "mae": 9.025877952575684,
+          "rmse": 12.530110359191895
+        },
+        "zero": {
+          "mae": 11.666853904724121,
+          "rmse": 17.917320251464844
+        }
+      },
+      "baselines_dataset_scaled_space": {
+        "persistence": {
+          "mae": 0.4516678750514984,
+          "rmse": 0.6270247101783752
+        },
+        "zero": {
+          "mae": 0.5838261842727661,
+          "rmse": 0.8966084718704224
+        }
+      },
+      "stage_results_metrics": null
+    },
+    {
+      "stage_name": "pems_bay_zero_shot",
+      "dataset_key": "PEMS-BAY",
+      "input_len": 96,
+      "output_len": 96,
+      "split": [
+        0.7,
+        0.1,
+        0.2
+      ],
+      "test_metric_mae_maps_to": "metric/mae_original / inverse RevIN + inverse dataset scaler (FactoST original_scale=1)",
+      "label": "PEMS-BAY",
+      "data_path": "data/PEMS-BAY/data.npz",
+      "shape_TNC": [
+        52116,
+        325,
+        1
+      ],
+      "raw_value_ch0_stats": {
+        "min": 0.0,
+        "max": 85.0999984741211,
+        "mean": 62.61957359526183,
+        "std": 9.594371077952257,
+        "p01": 19.700000762939453,
+        "p50": 65.30000305175781,
+        "p99": 71.69999694824219
+      },
+      "protocol": {
+        "scaler_type": "standard",
+        "use_revin": true,
+        "factost_original_scale": true,
+        "factost_split_requested": false
+      },
+      "factost_split_meta": {},
+      "split_lengths": {
+        "train": 36481,
+        "val": 5211,
+        "test": 10424
+      },
+      "standard_scaler": {
+        "mean_ch0": 62.736934661865234,
+        "std_ch0": 9.4368314743042
+      },
+      "revin_batch_after_normalize": {
+        "x_mean": 2.6348310200319247e-08,
+        "x_std": 1.0,
+        "y_mean": -2.539442539215088,
+        "y_std": 5.604605674743652
+      },
+      "baselines_raw_space_ch_all": {
+        "persistence": {
+          "mae": 4.1469807624816895,
+          "rmse": 7.025230884552002
+        },
+        "zero": {
+          "mae": 63.3378791809082,
+          "rmse": 63.677978515625
+        }
+      },
+      "baselines_dataset_scaled_space": {
+        "persistence": {
+          "mae": 0.4394463002681732,
+          "rmse": 0.7444480061531067
+        },
+        "zero": {
+          "mae": 6.71177339553833,
+          "rmse": 6.747813701629639
+        }
+      },
+      "stage_results_metrics": null
+    },
+    {
+      "stage_name": "weather_tgt_zero_shot",
+      "dataset_key": "Weather",
+      "input_len": 96,
+      "output_len": 96,
+      "split": [
+        0.7,
+        0.1,
+        0.2
+      ],
+      "test_metric_mae_maps_to": "metric/mae_revin_raw / inverse RevIN only, still in dataset-standardized space (FactoST original_scale=0)",
+      "label": "Weather",
+      "data_path": "data/Weather/data.npz",
+      "shape_TNC": [
+        52696,
+        21,
+        1
+      ],
+      "raw_value_ch0_stats": {
+        "min": -9999.0,
+        "max": 2498.93994140625,
+        "mean": 188.893347021639,
+        "std": 368.23736440697724,
+        "p01": -0.38999998569488525,
+        "p50": 11.140000343322754,
+        "p99": 1264.698449707032
+      },
+      "protocol": {
+        "scaler_type": "standard",
+        "use_revin": true,
+        "factost_original_scale": false,
+        "factost_split_requested": false
+      },
+      "factost_split_meta": {},
+      "split_lengths": {
+        "train": 36887,
+        "val": 5269,
+        "test": 10540
+      },
+      "standard_scaler": {
+        "mean_ch0": 195.80189514160156,
+        "std_ch0": 381.21234130859375
+      },
+      "revin_batch_after_normalize": {
+        "x_mean": -1.987058112717932e-06,
+        "x_std": 0.9511897563934326,
+        "y_mean": 802.8657836914062,
+        "y_std": 10423.509765625
+      },
+      "baselines_raw_space_ch_all": {
+        "persistence": {
+          "mae": 50.65580749511719,
+          "rmse": 136.04518127441406
+        },
+        "zero": {
+          "mae": 174.7756805419922,
+          "rmse": 375.71612548828125
+        }
+      },
+      "baselines_dataset_scaled_space": {
+        "persistence": {
+          "mae": 0.1328808218240738,
+          "rmse": 0.35687509179115295
+        },
+        "zero": {
+          "mae": 0.4584733545780182,
+          "rmse": 0.9855822324752808
+        }
+      },
+      "stage_results_metrics": null
+    },
+    {
+      "stage_name": "electricity_zero_shot",
+      "dataset_key": "Electricity",
+      "input_len": 96,
+      "output_len": 96,
+      "split": [
+        0.7,
+        0.1,
+        0.2
+      ],
+      "test_metric_mae_maps_to": "metric/mae_revin_raw / inverse RevIN only, still in dataset-standardized space (FactoST original_scale=0)",
+      "label": "Electricity",
+      "data_path": "data/Electricity/data.npz",
+      "shape_TNC": [
+        26304,
+        321,
+        1
+      ],
+      "raw_value_ch0_stats": {
+        "min": 0.0,
+        "max": 764000.0,
+        "mean": 2538.7916483095332,
+        "std": 15027.570159457544,
+        "p01": 0.0,
+        "p50": 550.0,
+        "p99": 31423.0
+      },
+      "protocol": {
+        "scaler_type": "standard",
+        "use_revin": true,
+        "factost_original_scale": false,
+        "factost_split_requested": false
+      },
+      "factost_split_meta": {},
+      "split_lengths": {
+        "train": 18412,
+        "val": 2630,
+        "test": 5262
+      },
+      "standard_scaler": {
+        "mean_ch0": 2552.669921875,
+        "std_ch0": 15048.111328125
+      },
+      "revin_batch_after_normalize": {
+        "x_mean": -9.102551302930806e-06,
+        "x_std": 0.9984411597251892,
+        "y_mean": 0.0517888106405735,
+        "y_std": 1.2890020608901978
+      },
+      "baselines_raw_space_ch_all": {
+        "persistence": {
+          "mae": 1083.659912109375,
+          "rmse": 10113.306640625
+        },
+        "zero": {
+          "mae": 2470.314453125,
+          "rmse": 14562.25390625
+        }
+      },
+      "baselines_dataset_scaled_space": {
+        "persistence": {
+          "mae": 0.07201302796602249,
+          "rmse": 0.6720648407936096
+        },
+        "zero": {
+          "mae": 0.1641610860824585,
+          "rmse": 0.9677130579948425
+        }
+      },
+      "stage_results_metrics": null
+    }
+  ],
+  "warnings": []
+}
