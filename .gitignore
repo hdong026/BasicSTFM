@@ -1,60 +1,14 @@
-# Byte-compiled / caches
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-.mypy_cache/
-.ruff_cache/
-.pytype/
-.pytest_cache/
-.coverage
-coverage.xml
-htmlcov/
-.tox/
-.nox/
+# 仅忽略仓库根目录下这些目录（缓存、构建产物、实验输出、大数据集根）。
+# 其余路径不再写入本文件，避免过度忽略导致误提交失败。
 
-# Virtual environments
-.venv/
-venv/
-ENV/
-env/
+/.pytest_cache/
+/benchmark/
+/build/
+/logs/
+/runs/
 
-# Packaging / editable installs
-build/
-dist/
-*.egg-info/
-*.egg
-pip-wheel-metadata/
-
-# Experiment outputs (checkpoints live under runs/)
-runs/
-logs/
-*.log
-
-# Jupyter
-.ipynb_checkpoints/
-
-# IDE / editor
-.idea/
-.vscode/
-*.swp
-*.swo
-*~
-
-# OS
-.DS_Store
-Thumbs.db
-
-# ML tooling (optional local)
-wandb/
-mlruns/
-
-# Large / downloaded datasets (repo root only; do not use bare "data/" or scripts/src .../data/ is ignored)
-/data/
-
-# Torch / distributed
-*.elastic
-
-# benchmark
-benchmark/
+# data/：忽略数据集与中间文件，但保留说明与示例目录
+/data/**
+!/data/README.md
+!/data/examples/
+!/data/examples/**
