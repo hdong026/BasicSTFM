@@ -158,6 +158,11 @@ class MultiStageTrainer:
         proto = getattr(task, "scale_protocol", None)
         if proto:
             self.logger.info("scale_protocol=%s", proto)
+        if getattr(task, "basicts_scale_logging", False):
+            self.logger.info("use_revin=%s", getattr(task, "use_revin", False))
+            self.logger.info(
+                "test/metric/mae maps to metric/mae_original_after_inverse_standard_scaler"
+            )
         if hasattr(task, "set_scaler") and hasattr(self.datamodule, "get_scaler"):
             task.set_scaler(self.datamodule.get_scaler())
         losses = LossCollection(stage.losses).to(self.device)

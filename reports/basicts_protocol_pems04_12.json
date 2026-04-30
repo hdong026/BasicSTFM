@@ -1,0 +1,158 @@
+{
+  "config": "configs/monash/dpm_sr_monash15_then_traffic_sharded_transfer_12_basicts_protocol.yaml",
+  "targets": [
+    {
+      "stage_name": "pems04_zero_shot",
+      "dataset_key": "PEMS04",
+      "data_path": "data/PEMS04_BasicTS/data.npz",
+      "shape_TNC": [
+        16992,
+        307,
+        1
+      ],
+      "selected_channel_note": "channel 0 only when building *_BasicTS NPZs from multi-channel sources",
+      "split_yaml_fallback": [
+        0.6,
+        0.2,
+        0.2
+      ],
+      "split_mode": "basicts",
+      "basicts_split_meta": {
+        "split_mode": "basicts",
+        "dataset_key_raw": "PEMS04",
+        "source": "GestaltCogTeam/BasicTS scripts/data_preparation/*/generate_training_data.py",
+        "resolution": "basic_ts_official",
+        "canonical_dataset_key": "PEMS04",
+        "train_val_test_ratio": [
+          0.6,
+          0.2,
+          0.2
+        ],
+        "dataset_datesplit_resolved": {
+          "train_len": 10195,
+          "val_len": 3398,
+          "test_len": 3399
+        }
+      },
+      "split_lengths_resolved": {
+        "train": 10195,
+        "val": 3398,
+        "test": 3399
+      },
+      "protocol_task": {
+        "use_revin": false,
+        "primary_supervision_space": "denormalized",
+        "basicts_scale_logging": true,
+        "scaler_type": "standard"
+      },
+      "standard_scaler_train_fit": {
+        "mean_shape": [
+          1,
+          1,
+          1
+        ],
+        "std_shape": [
+          1,
+          1,
+          1
+        ],
+        "mean_ch0_global_mean": 207.23692321777344,
+        "std_ch0_global_mean": 156.484130859375
+      },
+      "baselines_original_scale": {
+        "num_windows_test": 3376,
+        "zero_original_scale": {
+          "per_horizon_mae": [
+            217.7683186161755,
+            217.77034865770258,
+            217.77284568596878,
+            217.77518930330208,
+            217.77696173024376,
+            217.7756447118576,
+            217.77096712567732,
+            217.7641659076524,
+            217.75590680334068,
+            217.7447271022122,
+            217.73093941522453,
+            217.71405456411998
+          ],
+          "per_horizon_rmse": [
+            269.1731246769743,
+            269.1746950271337,
+            269.17691938234407,
+            269.17886287147843,
+            269.18049761225376,
+            269.1803524353457,
+            269.1786883032641,
+            269.17578344568165,
+            269.17214765766664,
+            269.16695989665254,
+            269.1605567334697,
+            269.1525921930556
+          ],
+          "average_over_horizons_mae": 217.76000580195645,
+          "average_over_horizons_rmse": 269.17259835294334,
+          "average_over_12_mae": 217.76000580195645,
+          "average_over_12_rmse": 269.17259835294334
+        },
+        "persistence_original_scale": {
+          "per_horizon_mae": [
+            21.073435594423948,
+            22.84181789060932,
+            24.756062143970855,
+            26.529095975423374,
+            28.30206226747148,
+            30.08913078716211,
+            32.09995638884172,
+            34.130023966840085,
+            36.15736970684039,
+            38.12108078484648,
+            40.06931665560307,
+            42.09046227827778
+          ],
+          "per_horizon_rmse": [
+            34.275781700471114,
+            36.64130046717638,
+            39.045951368271105,
+            41.31845441157972,
+            43.59499509465571,
+            45.91614931459927,
+            48.52144969073117,
+            51.17184799244337,
+            53.8632092780423,
+            56.419919898996156,
+            58.92788469393022,
+            61.63886384185579
+          ],
+          "average_over_horizons_mae": 31.35498453669255,
+          "average_over_horizons_rmse": 47.61131731272935,
+          "average_over_12_mae": 31.35498453669255,
+          "average_over_12_rmse": 47.61131731272935,
+          "horizon_1": {
+            "mae": 21.073435594423948,
+            "rmse": 34.275781700471114
+          },
+          "horizon_3": {
+            "mae": 24.756062143970855,
+            "rmse": 39.045951368271105
+          },
+          "horizon_6": {
+            "mae": 30.08913078716211,
+            "rmse": 45.91614931459927
+          },
+          "horizon_12": {
+            "mae": 42.09046227827778,
+            "rmse": 61.63886384185579
+          }
+        }
+      },
+      "metric_space_audit": {
+        "test_metric_mae_maps_to": "metric/mae_original_after_inverse_standard_scaler",
+        "condition": "When task.use_revin=false and primary_supervision_space=denormalized, logged test/metric/mae equals metric/mae_original_after_inverse_standard_scaler (inverse StandardScaler on predictions & targets before reduction).",
+        "expected_use_revin": false
+      },
+      "stage_results_metrics": null
+    }
+  ],
+  "warnings": []
+}

@@ -56,6 +56,7 @@ class StableResidualForecastingTask(Task):
         # Disabled by default in the current repair phase.
         cross_cov_weight: float = 0.0,
         primary_supervision_space: str = "denormalized",
+        basicts_scale_logging: bool = False,
         use_revin: bool = False,
         revin_value_channel: Union[int, Sequence[int]] = 0,
         revin_eps: float = 1e-5,
@@ -98,6 +99,8 @@ class StableResidualForecastingTask(Task):
         self.print_debug = bool(print_debug)
         self._step_counter = 0
 
+        self.basicts_scale_logging = bool(basicts_scale_logging)
+
         self.use_revin = bool(use_revin)
         if isinstance(revin_value_channel, int):
             self.revin_value_channels: Tuple[int, ...] = (int(revin_value_channel),)
@@ -118,13 +121,19 @@ class StableResidualForecastingTask(Task):
 
         self.factost_original_scale = bool(factost_original_scale)
 
-        #: Logged once per stage start in ``MultiStageTrainer`` when RevIN targets are enabled.
+        #: Logged once per stage start when RevIN / BasicTS banners apply.
         if self.use_revin:
             self.scale_protocol = (
                 "factost_revin_value|factost_original_scale="
                 f"{self.factost_original_scale}|primary_test_metric="
                 f"{'original' if self.factost_original_scale else 'revin_raw'}"
             )
+        elif (
+            self.basicts_scale_logging
+            and not self.use_revin
+            and self.primary_supervision_space == "denormalized"
+        ):
+            self.scale_protocol = "basicts_standard_original"
         else:
             self.scale_protocol = None
 
@@ -344,6 +353,16 @@ class StableResidualForecastingTask(Task):
                 sq = (pred_denorm - target_denorm).pow(2)
                 logs["metric/rmse_raw"] = torch.sqrt(
                     _scalar_masked_mean(sq, metric_mask).clamp_min(1e-12)
+                )
+        elif not self.use_revin and self.primary_supervision_space == "denormalized":
+            with torch.no_grad():
+                err_o = (pred_denorm - target_denorm).abs()
+                sq_o = (pred_denorm - target_denorm).pow(2)
+                logs["metric/mae_original_after_inverse_standard_scaler"] = _scalar_masked_mean(
+                    err_o, metric_mask
+                )
+                logs["metric/rmse_original_after_inverse_standard_scaler"] = torch.sqrt(
+                    _scalar_masked_mean(sq_o, metric_mask).clamp_min(1e-12)
                 )
 
         if self.log_aux_losses:

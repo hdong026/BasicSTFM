@@ -12,6 +12,7 @@ from torch.utils.data import DataLoader, Dataset, Subset
 from torch.utils.data.distributed import DistributedSampler
 from torch.utils.data._utils.collate import default_collate
 
+from basicstfm.data.basicts_split import infer_dataset_key_from_data_path, resolve_basicts_split_lengths
 from basicstfm.data.factost_split import resolve_factost_split_lengths, split_triple_to_split_field
 from basicstfm.data.scaler import DatasetAwareScaler, build_scaler
 from basicstfm.data.window_dataset import WindowDataset
@@ -303,6 +304,7 @@ class WindowDataModule:
         max_val_windows: Optional[int] = None,
         max_test_windows: Optional[int] = None,
         factost_split: bool = False,
+        split_mode: Optional[str] = None,
     ) -> None:
         if output_len is not None:
             target_len = output_len
@@ -334,7 +336,9 @@ class WindowDataModule:
         self.max_val_windows = None if max_val_windows is None else int(max_val_windows)
         self.max_test_windows = None if max_test_windows is None else int(max_test_windows)
         self.factost_split = bool(factost_split)
+        self.split_mode = None if split_mode is None else str(split_mode).strip().lower()
         self._factost_split_audit: Optional[Dict[str, Any]] = None
+        self._basicts_split_audit: Optional[Dict[str, Any]] = None
         self.scaler = build_scaler(self.scaler_cfg)
         self.graph: Optional[torch.Tensor] = None
         self.datasets: Dict[str, Dataset] = {}
@@ -377,6 +381,8 @@ class WindowDataModule:
             "num_windows": {"train": n_train, "val": n_val, "test": n_test},
             "factost_split": self.factost_split,
             "factost_split_audit": self._factost_split_audit,
+            "split_mode": self.split_mode,
+            "basicts_split_audit": self._basicts_split_audit,
         }
 
     def setup(self) -> None:
@@ -389,7 +395,21 @@ class WindowDataModule:
 
         split_spec: Sequence[float | int] = self.split
         self._factost_split_audit = None
-        if self.factost_split:
+        self._basicts_split_audit = None
+        sm = self.split_mode or ""
+        if sm == "basicts":
+            if self.factost_split:
+                raise ValueError("Use either split_mode='basicts' or factost_split=True, not both")
+            dk = self.name or infer_dataset_key_from_data_path(self.data_path)
+            triple, audit = resolve_basicts_split_lengths(
+                total_timesteps=len(array),
+                dataset_key=dk,
+                fallback_split=tuple(float(x) for x in self.split),
+            )
+            self._basicts_split_audit = audit
+            split_spec = split_triple_to_split_field(triple)
+            self.split = tuple(int(x) for x in split_spec)
+        elif self.factost_split:
             triple, audit = resolve_factost_split_lengths(self.data_path, len(array), self.split)
             self._factost_split_audit = audit
             if triple is not None:
@@ -906,6 +926,7 @@ class MultiDatasetWindowDataModule:
         max_val_windows: Optional[int] = None,
         max_test_windows: Optional[int] = None,
         factost_split: bool = False,
+        split_mode: Optional[str] = None,
     ) -> None:
         if output_len is not None:
             target_len = output_len
@@ -920,6 +941,7 @@ class MultiDatasetWindowDataModule:
         self.default_graph_key = graph_key
         self.default_split = tuple(split)
         self.default_factost_split = bool(factost_split)
+        self.default_split_mode = None if split_mode is None else str(split_mode).strip().lower()
         self.default_stride = int(stride)
         self.default_scaler_cfg = scaler or {"type": "standard"}
         self.batch_size = int(batch_size)
@@ -981,7 +1003,22 @@ class MultiDatasetWindowDataModule:
 
             split_spec: Sequence[float | int] = cfg["split"]
             factost_audit = None
-            if cfg["factost_split"]:
+            basicts_audit = None
+            sm = cfg.get("split_mode") or ""
+            sm = None if sm == "" else str(sm).strip().lower()
+            if sm == "basicts":
+                if cfg["factost_split"]:
+                    raise ValueError(
+                        f"Dataset {name!r}: use either split_mode='basicts' or factost_split=True, not both"
+                    )
+                triple, basicts_audit = resolve_basicts_split_lengths(
+                    total_timesteps=len(array),
+                    dataset_key=name,
+                    fallback_split=tuple(float(x) for x in cfg["split"]),
+                )
+                split_spec = split_triple_to_split_field(triple)
+                cfg["split"] = tuple(int(x) for x in split_spec)
+            elif cfg["factost_split"]:
                 triple, audit = resolve_factost_split_lengths(cfg["data_path"], len(array), cfg["split"])
                 factost_audit = audit
                 if triple is not None:
@@ -1059,6 +1096,8 @@ class MultiDatasetWindowDataModule:
                 "split": list(cfg["split"]),
                 "stride": int(cfg["stride"]),
                 "factost_split_audit": factost_audit,
+                "basicts_split_audit": basicts_audit,
+                "split_mode": cfg.get("split_mode"),
             }
 
         self.scaler = DatasetAwareScaler.from_scalers(
@@ -1135,6 +1174,11 @@ class MultiDatasetWindowDataModule:
             mtw = int(mtw)
             if mtw <= 0:
                 raise ValueError("max_train_windows must be positive when set")
+        sm_raw = cfg.get("split_mode", self.default_split_mode)
+        if sm_raw is None or (isinstance(sm_raw, str) and sm_raw.strip() == ""):
+            split_mode_norm: Optional[str] = None
+        else:
+            split_mode_norm = str(sm_raw).strip().lower()
         return {
             "name": name,
             "data_path": str(data_path),
@@ -1147,6 +1191,7 @@ class MultiDatasetWindowDataModule:
             "batch_size": int(cfg.get("batch_size", self.batch_size)),
             "max_train_windows": mtw,
             "factost_split": bool(cfg.get("factost_split", self.default_factost_split)),
+            "split_mode": split_mode_norm,
         }
 
     def _make_split_loaders(
