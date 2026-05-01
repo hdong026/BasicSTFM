@@ -392,17 +392,34 @@ class MultiStageTrainer:
 
         last_path = self.work_dir / "checkpoints" / f"{stage.name}_last.pt"
         if stage.save_last and stage.epochs % stage.save_every != 0:
-            self._save_checkpoint(
-                path=last_path,
+                self._save_checkpoint(
+                    path=last_path,
+                    stage=stage,
+                    stage_index=stage_index,
+                    epoch=stage.epochs,
+                    model=self.model,
+                    optimizer=optimizer,
+                    scheduler=scheduler,
+                    score=None,
+                    best_score=best_score,
+                    tag="last",
+                )
+        best_path = self.work_dir / "checkpoints" / f"{stage.name}_best.pt"
+        if (
+            stage.save_best
+            and best_path.is_file()
+            and best_score < float("inf")
+        ):
+            self.logger.info(
+                "Reloading best validation checkpoint for test: %s (score=%.6f)",
+                best_path,
+                best_score,
+            )
+            self._load_stage_weights(
+                str(best_path),
                 stage=stage,
-                stage_index=stage_index,
-                epoch=stage.epochs,
-                model=self.model,
-                optimizer=optimizer,
-                scheduler=scheduler,
-                score=None,
-                best_score=best_score,
-                tag="last",
+                strict=stage.strict_load,
+                restore_rng=False,
             )
         test_logs = self._run_eval_loaders(
             loader=self.datamodule.test_dataloader(),
