@@ -152,6 +152,18 @@ dataset_groups:
     - us_births
 
 data:
+  type: WindowDataModule
+  dataset_key: METR-LA
+  input_len: 12
+  output_len: 12
+  batch_size: 8
+  split:
+    - 0.7
+    - 0.1
+    - 0.2
+  scaler:
+    type: standard
+
 model:
   type: UniSTFoundationModel
   num_nodes: auto
