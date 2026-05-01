@@ -1,0 +1,1031 @@
+# OpenCity ablation: head + last block (blocks.2) + final LayerNorm (num_layers=3).
+
+# OpenCity (adapter) — Monash-15 warmup -> mixed-domain pretrain -> BasicTS traffic transfer (12/12).
+# Traffic arrays: data/<DATASET>_BasicTS/data.npz (StandardScaler + split_mode basicts + original-scale metrics).
+# Graphs: data/<DATASET>/adj.npz
+#
+# Optional: point stage-2 load to an external Monash warmup checkpoint:
+#   export OPENCITY_MONASH15_CKPT=/path/to/opencity_monash15_warmup_last.pt
+# and replace stage ``monash_temporal_warmup`` with a single load-only stage if desired.
+
+experiment_name: opencity_monash15_then_mixed_sharded_transfer_12_basicts_protocol_head_ablation
+seed: 42
+
+trainer:
+  type: MultiStageTrainer
+  device: auto
+  work_dir: runs/opencity_monash15_then_mixed_sharded_transfer_12_basicts_protocol_head_ablation
+  log_every: 50
+
+dataset_registry:
+  LargeST_xd_part0:
+    name: LargeST_xd_part0
+    data_path: data/LargeST_xd_part0/data.npz
+    graph_path: data/LargeST_xd_part0/adj.npz
+    batch_size: 4
+  LargeST_xd_part1:
+    name: LargeST_xd_part1
+    data_path: data/LargeST_xd_part1/data.npz
+    graph_path: data/LargeST_xd_part1/adj.npz
+    batch_size: 4
+  KnowAir:
+    name: KnowAir
+    data_path: data/KnowAir/data.npz
+    graph_path: data/KnowAir/adj.npz
+    batch_size: 4
+  Weather:
+    name: Weather
+    data_path: data/Weather/data.npz
+    graph_path: data/Weather/adj.npz
+    batch_size: 4
+  ETTm1:
+    name: ETTm1
+    data_path: data/ETTm1/data.npz
+    graph_path: data/ETTm1/adj.npz
+    batch_size: 4
+  METR-LA:
+    name: METR-LA
+    data_path: data/METR-LA_BasicTS/data.npz
+    graph_path: data/METR-LA/adj.npz
+    batch_size: 8
+  PEMS03:
+    name: PEMS03
+    data_path: data/PEMS03_BasicTS/data.npz
+    graph_path: data/PEMS03/adj.npz
+    batch_size: 8
+  PEMS04:
+    name: PEMS04
+    data_path: data/PEMS04_BasicTS/data.npz
+    graph_path: data/PEMS04/adj.npz
+    batch_size: 8
+  PEMS07:
+    name: PEMS07
+    data_path: data/PEMS07_BasicTS/data.npz
+    graph_path: data/PEMS07/adj.npz
+    batch_size: 8
+  PEMS08:
+    name: PEMS08
+    data_path: data/PEMS08_BasicTS/data.npz
+    graph_path: data/PEMS08/adj.npz
+    batch_size: 8
+  PEMS-BAY:
+    name: PEMS-BAY
+    data_path: data/PEMS-BAY_BasicTS/data.npz
+    graph_path: data/PEMS-BAY/adj.npz
+    batch_size: 8
+  australian_electricity_demand:
+    name: australian_electricity_demand
+    monash_root: data/Monash15/australian_electricity_demand
+    batch_size: 4
+  london_smart_meters:
+    name: london_smart_meters
+    monash_root: data/Monash15/london_smart_meters
+    batch_size: 4
+  solar_10_minutes:
+    name: solar_10_minutes
+    monash_root: data/Monash15/solar_10_minutes
+    batch_size: 4
+  solar_4_seconds:
+    name: solar_4_seconds
+    monash_root: data/Monash15/solar_4_seconds
+    batch_size: 4
+  wind_farms_minutely:
+    name: wind_farms_minutely
+    monash_root: data/Monash15/wind_farms_minutely
+    batch_size: 4
+  wind_4_seconds:
+    name: wind_4_seconds
+    monash_root: data/Monash15/wind_4_seconds
+    batch_size: 4
+  weather:
+    name: weather
+    monash_root: data/Monash15/weather
+    batch_size: 4
+  kdd_cup_2018:
+    name: kdd_cup_2018
+    monash_root: data/Monash15/kdd_cup_2018
+    batch_size: 4
+  temperature_rain:
+    name: temperature_rain
+    monash_root: data/Monash15/temperature_rain
+    batch_size: 4
+  saugeenday:
+    name: saugeenday
+    monash_root: data/Monash15/saugeenday
+    batch_size: 4
+  sunspot:
+    name: sunspot
+    monash_root: data/Monash15/sunspot
+    batch_size: 4
+  pedestrian_counts:
+    name: pedestrian_counts
+    monash_root: data/Monash15/pedestrian_counts
+    batch_size: 4
+  kaggle_web_traffic:
+    name: kaggle_web_traffic
+    monash_root: data/Monash15/kaggle_web_traffic
+    batch_size: 4
+  bitcoin:
+    name: bitcoin
+    monash_root: data/Monash15/bitcoin
+    batch_size: 4
+  us_births:
+    name: us_births
+    monash_root: data/Monash15/us_births
+    batch_size: 4
+
+dataset_groups:
+  cross_domain_sharded_sources:
+    - LargeST_xd_part0
+    - LargeST_xd_part1
+    - KnowAir
+    - Weather
+    - ETTm1
+  monash15_sources:
+    - australian_electricity_demand
+    - london_smart_meters
+    - solar_10_minutes
+    - solar_4_seconds
+    - wind_farms_minutely
+    - wind_4_seconds
+    - weather
+    - kdd_cup_2018
+    - temperature_rain
+    - saugeenday
+    - sunspot
+    - pedestrian_counts
+    - kaggle_web_traffic
+    - bitcoin
+    - us_births
+
+data:
+  type: WindowDataModule
+  dataset_key: METR-LA
+  input_len: 12
+  output_len: 12
+  batch_size: 8
+  split:
+    - 0.7
+    - 0.1
+    - 0.2
+  scaler:
+    type: standard
+
+model:
+  type: OpenCityFoundationModel
+  num_nodes: auto
+  input_dim: auto
+  output_dim: auto
+  input_len: auto
+  output_len: auto
+  max_num_nodes: 1024
+  hidden_dim: 128
+  num_layers: 3
+  num_heads: 4
+  ffn_dim: 256
+  dropout: 0.1
+
+pipeline:
+  stages:
+  - name: monash_temporal_warmup
+    save_artifact: opencity_monash15_warmup
+    reset_data: true
+    data:
+      type: MonashMultiDatasetWindowDataModule
+      dataset_group: monash15_sources
+      input_len: 12
+      output_len: 12
+      num_workers: 2
+      train_strategy: round_robin
+      eval_strategy: per_dataset
+      steps_per_epoch: 10000
+      max_val_windows: 256
+      max_test_windows: 512
+      split:
+        - 0.7
+        - 0.1
+        - 0.2
+      scaler:
+        type: identity
+      norm_mode: instance_standard
+    epochs: 4
+    task:
+      type: ForecastingTask
+      primary_supervision_space: normalized
+    losses:
+      - type: mae
+        weight: 1.0
+      - type: mse
+        weight: 0.05
+    metrics:
+      - type: mae
+      - type: rmse
+    optimizer:
+      type: AdamW
+      lr: 0.001
+      weight_decay: 0.0001
+    scheduler:
+      type: CosineAnnealingLR
+      T_max: 4
+    validate_every: 1
+    gradient_clip_val: 5.0
+
+  - name: mixed_domain_pretrain
+    save_artifact: opencity_xd_mixed
+    load_from: ${env:OPENCITY_MONASH15_CKPT,opencity_monash15_warmup}
+    load_method: foundation_channel_inflate
+    strict_load: false
+    reset_data: true
+    data:
+      type: MultiDatasetWindowDataModule
+      dataset_group: cross_domain_sharded_sources
+      input_len: 12
+      output_len: 12
+      num_workers: 2
+      train_strategy: round_robin
+      eval_strategy: per_dataset
+      steps_per_epoch: 10000
+      max_val_windows: 256
+      max_test_windows: 512
+      split:
+        - 0.7
+        - 0.1
+        - 0.2
+      scaler:
+        type: standard
+    epochs: 10
+    task:
+      type: ForecastingTask
+    losses:
+      - type: mae
+        weight: 1.0
+      - type: mse
+        weight: 0.05
+    metrics:
+      - type: mae
+      - type: rmse
+    optimizer:
+      type: AdamW
+      lr: 0.001
+      weight_decay: 0.0001
+    scheduler:
+      type: CosineAnnealingLR
+      T_max: 10
+    validate_every: 1
+    gradient_clip_val: 5.0
+
+  - name: metr_la_zero_shot
+    eval_only: true
+    epochs: 0
+    reset_data: true
+    data:
+      type: WindowDataModule
+      dataset_key: METR-LA
+      input_len: 12
+      output_len: 12
+      batch_size: 8
+      split:
+        - 0.6
+        - 0.2
+        - 0.2
+      scaler:
+        type: standard
+      split_mode: basicts
+    load_from: opencity_xd_mixed
+    strict_load: true
+    task:
+      type: ForecastingTask
+      model_mode: zero_shot
+      primary_supervision_space: denormalized
+      basicts_scale_logging: true
+    losses:
+      - type: mae
+    metrics:
+      - type: mae
+      - type: rmse
+
+  - name: metr_la_five_percent_finetune
+    epochs: 3
+    reset_data: true
+    data:
+      type: WindowDataModule
+      dataset_key: METR-LA
+      input_len: 12
+      output_len: 12
+      batch_size: 8
+      split:
+        - 0.6
+        - 0.2
+        - 0.2
+      scaler:
+        type: standard
+      split_mode: basicts
+    load_from: opencity_xd_mixed
+    strict_load: true
+    few_shot_ratio: 0.05
+    freeze:
+      - all
+    unfreeze:
+      - forecast_head.*
+      - blocks.2.*
+      - norm.weight
+      - norm.bias
+    task:
+      type: ForecastingTask
+      primary_supervision_space: denormalized
+      basicts_scale_logging: true
+    losses:
+      - type: mae
+        weight: 1.0
+      - type: mse
+        weight: 0.05
+    metrics:
+      - type: mae
+      - type: rmse
+    optimizer:
+      type: AdamW
+      lr: 0.0005
+      weight_decay: 0.0001
+    scheduler:
+      type: CosineAnnealingLR
+      T_max: 3
+    validate_every: 1
+    gradient_clip_val: 5.0
+
+  - name: metr_la_ten_percent_finetune
+    epochs: 3
+    reset_data: true
+    data:
+      type: WindowDataModule
+      dataset_key: METR-LA
+      input_len: 12
+      output_len: 12
+      batch_size: 8
+      split:
+        - 0.6
+        - 0.2
+        - 0.2
+      scaler:
+        type: standard
+      split_mode: basicts
+    load_from: opencity_xd_mixed
+    strict_load: true
+    few_shot_ratio: 0.10
+    freeze:
+      - all
+    unfreeze:
+      - forecast_head.*
+      - blocks.2.*
+      - norm.weight
+      - norm.bias
+    task:
+      type: ForecastingTask
+      primary_supervision_space: denormalized
+      basicts_scale_logging: true
+    losses:
+      - type: mae
+        weight: 1.0
+      - type: mse
+        weight: 0.05
+    metrics:
+      - type: mae
+      - type: rmse
+    optimizer:
+      type: AdamW
+      lr: 0.0005
+      weight_decay: 0.0001
+    scheduler:
+      type: CosineAnnealingLR
+      T_max: 3
+    validate_every: 1
+    gradient_clip_val: 5.0
+
+  - name: pems03_zero_shot
+    eval_only: true
+    epochs: 0
+    reset_data: true
+    data:
+      type: WindowDataModule
+      dataset_key: PEMS03
+      input_len: 12
+      output_len: 12
+      batch_size: 8
+      split:
+        - 0.6
+        - 0.2
+        - 0.2
+      scaler:
+        type: standard
+      split_mode: basicts
+    load_from: opencity_xd_mixed
+    strict_load: true
+    task:
+      type: ForecastingTask
+      model_mode: zero_shot
+      primary_supervision_space: denormalized
+      basicts_scale_logging: true
+    losses:
+      - type: mae
+    metrics:
+      - type: mae
+      - type: rmse
+
+  - name: pems03_five_percent_finetune
+    epochs: 3
+    reset_data: true
+    data:
+      type: WindowDataModule
+      dataset_key: PEMS03
+      input_len: 12
+      output_len: 12
+      batch_size: 8
+      split:
+        - 0.6
+        - 0.2
+        - 0.2
+      scaler:
+        type: standard
+      split_mode: basicts
+    load_from: opencity_xd_mixed
+    strict_load: true
+    few_shot_ratio: 0.05
+    freeze:
+      - all
+    unfreeze:
+      - forecast_head.*
+      - blocks.2.*
+      - norm.weight
+      - norm.bias
+    task:
+      type: ForecastingTask
+      primary_supervision_space: denormalized
+      basicts_scale_logging: true
+    losses:
+      - type: mae
+        weight: 1.0
+      - type: mse
+        weight: 0.05
+    metrics:
+      - type: mae
+      - type: rmse
+    optimizer:
+      type: AdamW
+      lr: 0.0005
+      weight_decay: 0.0001
+    scheduler:
+      type: CosineAnnealingLR
+      T_max: 3
+    validate_every: 1
+    gradient_clip_val: 5.0
+
+  - name: pems03_ten_percent_finetune
+    epochs: 3
+    reset_data: true
+    data:
+      type: WindowDataModule
+      dataset_key: PEMS03
+      input_len: 12
+      output_len: 12
+      batch_size: 8
+      split:
+        - 0.6
+        - 0.2
+        - 0.2
+      scaler:
+        type: standard
+      split_mode: basicts
+    load_from: opencity_xd_mixed
+    strict_load: true
+    few_shot_ratio: 0.10
+    freeze:
+      - all
+    unfreeze:
+      - forecast_head.*
+      - blocks.2.*
+      - norm.weight
+      - norm.bias
+    task:
+      type: ForecastingTask
+      primary_supervision_space: denormalized
+      basicts_scale_logging: true
+    losses:
+      - type: mae
+        weight: 1.0
+      - type: mse
+        weight: 0.05
+    metrics:
+      - type: mae
+      - type: rmse
+    optimizer:
+      type: AdamW
+      lr: 0.0005
+      weight_decay: 0.0001
+    scheduler:
+      type: CosineAnnealingLR
+      T_max: 3
+    validate_every: 1
+    gradient_clip_val: 5.0
+
+  - name: pems04_zero_shot
+    eval_only: true
+    epochs: 0
+    reset_data: true
+    data:
+      type: WindowDataModule
+      dataset_key: PEMS04
+      input_len: 12
+      output_len: 12
+      batch_size: 8
+      split:
+        - 0.6
+        - 0.2
+        - 0.2
+      scaler:
+        type: standard
+      split_mode: basicts
+    load_from: opencity_xd_mixed
+    strict_load: true
+    task:
+      type: ForecastingTask
+      model_mode: zero_shot
+      primary_supervision_space: denormalized
+      basicts_scale_logging: true
+    losses:
+      - type: mae
+    metrics:
+      - type: mae
+      - type: rmse
+
+  - name: pems04_five_percent_finetune
+    epochs: 3
+    reset_data: true
+    data:
+      type: WindowDataModule
+      dataset_key: PEMS04
+      input_len: 12
+      output_len: 12
+      batch_size: 8
+      split:
+        - 0.6
+        - 0.2
+        - 0.2
+      scaler:
+        type: standard
+      split_mode: basicts
+    load_from: opencity_xd_mixed
+    strict_load: true
+    few_shot_ratio: 0.05
+    freeze:
+      - all
+    unfreeze:
+      - forecast_head.*
+      - blocks.2.*
+      - norm.weight
+      - norm.bias
+    task:
+      type: ForecastingTask
+      primary_supervision_space: denormalized
+      basicts_scale_logging: true
+    losses:
+      - type: mae
+        weight: 1.0
+      - type: mse
+        weight: 0.05
+    metrics:
+      - type: mae
+      - type: rmse
+    optimizer:
+      type: AdamW
+      lr: 0.0005
+      weight_decay: 0.0001
+    scheduler:
+      type: CosineAnnealingLR
+      T_max: 3
+    validate_every: 1
+    gradient_clip_val: 5.0
+
+  - name: pems04_ten_percent_finetune
+    epochs: 3
+    reset_data: true
+    data:
+      type: WindowDataModule
+      dataset_key: PEMS04
+      input_len: 12
+      output_len: 12
+      batch_size: 8
+      split:
+        - 0.6
+        - 0.2
+        - 0.2
+      scaler:
+        type: standard
+      split_mode: basicts
+    load_from: opencity_xd_mixed
+    strict_load: true
+    few_shot_ratio: 0.10
+    freeze:
+      - all
+    unfreeze:
+      - forecast_head.*
+      - blocks.2.*
+      - norm.weight
+      - norm.bias
+    task:
+      type: ForecastingTask
+      primary_supervision_space: denormalized
+      basicts_scale_logging: true
+    losses:
+      - type: mae
+        weight: 1.0
+      - type: mse
+        weight: 0.05
+    metrics:
+      - type: mae
+      - type: rmse
+    optimizer:
+      type: AdamW
+      lr: 0.0005
+      weight_decay: 0.0001
+    scheduler:
+      type: CosineAnnealingLR
+      T_max: 3
+    validate_every: 1
+    gradient_clip_val: 5.0
+
+  - name: pems07_zero_shot
+    eval_only: true
+    epochs: 0
+    reset_data: true
+    data:
+      type: WindowDataModule
+      dataset_key: PEMS07
+      input_len: 12
+      output_len: 12
+      batch_size: 8
+      split:
+        - 0.6
+        - 0.2
+        - 0.2
+      scaler:
+        type: standard
+      split_mode: basicts
+    load_from: opencity_xd_mixed
+    strict_load: true
+    task:
+      type: ForecastingTask
+      model_mode: zero_shot
+      primary_supervision_space: denormalized
+      basicts_scale_logging: true
+    losses:
+      - type: mae
+    metrics:
+      - type: mae
+      - type: rmse
+
+  - name: pems07_five_percent_finetune
+    epochs: 3
+    reset_data: true
+    data:
+      type: WindowDataModule
+      dataset_key: PEMS07
+      input_len: 12
+      output_len: 12
+      batch_size: 8
+      split:
+        - 0.6
+        - 0.2
+        - 0.2
+      scaler:
+        type: standard
+      split_mode: basicts
+    load_from: opencity_xd_mixed
+    strict_load: true
+    few_shot_ratio: 0.05
+    freeze:
+      - all
+    unfreeze:
+      - forecast_head.*
+      - blocks.2.*
+      - norm.weight
+      - norm.bias
+    task:
+      type: ForecastingTask
+      primary_supervision_space: denormalized
+      basicts_scale_logging: true
+    losses:
+      - type: mae
+        weight: 1.0
+      - type: mse
+        weight: 0.05
+    metrics:
+      - type: mae
+      - type: rmse
+    optimizer:
+      type: AdamW
+      lr: 0.0005
+      weight_decay: 0.0001
+    scheduler:
+      type: CosineAnnealingLR
+      T_max: 3
+    validate_every: 1
+    gradient_clip_val: 5.0
+
+  - name: pems07_ten_percent_finetune
+    epochs: 3
+    reset_data: true
+    data:
+      type: WindowDataModule
+      dataset_key: PEMS07
+      input_len: 12
+      output_len: 12
+      batch_size: 8
+      split:
+        - 0.6
+        - 0.2
+        - 0.2
+      scaler:
+        type: standard
+      split_mode: basicts
+    load_from: opencity_xd_mixed
+    strict_load: true
+    few_shot_ratio: 0.10
+    freeze:
+      - all
+    unfreeze:
+      - forecast_head.*
+      - blocks.2.*
+      - norm.weight
+      - norm.bias
+    task:
+      type: ForecastingTask
+      primary_supervision_space: denormalized
+      basicts_scale_logging: true
+    losses:
+      - type: mae
+        weight: 1.0
+      - type: mse
+        weight: 0.05
+    metrics:
+      - type: mae
+      - type: rmse
+    optimizer:
+      type: AdamW
+      lr: 0.0005
+      weight_decay: 0.0001
+    scheduler:
+      type: CosineAnnealingLR
+      T_max: 3
+    validate_every: 1
+    gradient_clip_val: 5.0
+
+  - name: pems08_zero_shot
+    eval_only: true
+    epochs: 0
+    reset_data: true
+    data:
+      type: WindowDataModule
+      dataset_key: PEMS08
+      input_len: 12
+      output_len: 12
+      batch_size: 8
+      split:
+        - 0.6
+        - 0.2
+        - 0.2
+      scaler:
+        type: standard
+      split_mode: basicts
+    load_from: opencity_xd_mixed
+    strict_load: true
+    task:
+      type: ForecastingTask
+      model_mode: zero_shot
+      primary_supervision_space: denormalized
+      basicts_scale_logging: true
+    losses:
+      - type: mae
+    metrics:
+      - type: mae
+      - type: rmse
+
+  - name: pems08_five_percent_finetune
+    epochs: 3
+    reset_data: true
+    data:
+      type: WindowDataModule
+      dataset_key: PEMS08
+      input_len: 12
+      output_len: 12
+      batch_size: 8
+      split:
+        - 0.6
+        - 0.2
+        - 0.2
+      scaler:
+        type: standard
+      split_mode: basicts
+    load_from: opencity_xd_mixed
+    strict_load: true
+    few_shot_ratio: 0.05
+    freeze:
+      - all
+    unfreeze:
+      - forecast_head.*
+      - blocks.2.*
+      - norm.weight
+      - norm.bias
+    task:
+      type: ForecastingTask
+      primary_supervision_space: denormalized
+      basicts_scale_logging: true
+    losses:
+      - type: mae
+        weight: 1.0
+      - type: mse
+        weight: 0.05
+    metrics:
+      - type: mae
+      - type: rmse
+    optimizer:
+      type: AdamW
+      lr: 0.0005
+      weight_decay: 0.0001
+    scheduler:
+      type: CosineAnnealingLR
+      T_max: 3
+    validate_every: 1
+    gradient_clip_val: 5.0
+
+  - name: pems08_ten_percent_finetune
+    epochs: 3
+    reset_data: true
+    data:
+      type: WindowDataModule
+      dataset_key: PEMS08
+      input_len: 12
+      output_len: 12
+      batch_size: 8
+      split:
+        - 0.6
+        - 0.2
+        - 0.2
+      scaler:
+        type: standard
+      split_mode: basicts
+    load_from: opencity_xd_mixed
+    strict_load: true
+    few_shot_ratio: 0.10
+    freeze:
+      - all
+    unfreeze:
+      - forecast_head.*
+      - blocks.2.*
+      - norm.weight
+      - norm.bias
+    task:
+      type: ForecastingTask
+      primary_supervision_space: denormalized
+      basicts_scale_logging: true
+    losses:
+      - type: mae
+        weight: 1.0
+      - type: mse
+        weight: 0.05
+    metrics:
+      - type: mae
+      - type: rmse
+    optimizer:
+      type: AdamW
+      lr: 0.0005
+      weight_decay: 0.0001
+    scheduler:
+      type: CosineAnnealingLR
+      T_max: 3
+    validate_every: 1
+    gradient_clip_val: 5.0
+
+  - name: pems_bay_zero_shot
+    eval_only: true
+    epochs: 0
+    reset_data: true
+    data:
+      type: WindowDataModule
+      dataset_key: PEMS-BAY
+      input_len: 12
+      output_len: 12
+      batch_size: 8
+      split:
+        - 0.6
+        - 0.2
+        - 0.2
+      scaler:
+        type: standard
+      split_mode: basicts
+    load_from: opencity_xd_mixed
+    strict_load: true
+    task:
+      type: ForecastingTask
+      model_mode: zero_shot
+      primary_supervision_space: denormalized
+      basicts_scale_logging: true
+    losses:
+      - type: mae
+    metrics:
+      - type: mae
+      - type: rmse
+
+  - name: pems_bay_five_percent_finetune
+    epochs: 3
+    reset_data: true
+    data:
+      type: WindowDataModule
+      dataset_key: PEMS-BAY
+      input_len: 12
+      output_len: 12
+      batch_size: 8
+      split:
+        - 0.6
+        - 0.2
+        - 0.2
+      scaler:
+        type: standard
+      split_mode: basicts
+    load_from: opencity_xd_mixed
+    strict_load: true
+    few_shot_ratio: 0.05
+    freeze:
+      - all
+    unfreeze:
+      - forecast_head.*
+      - blocks.2.*
+      - norm.weight
+      - norm.bias
+    task:
+      type: ForecastingTask
+      primary_supervision_space: denormalized
+      basicts_scale_logging: true
+    losses:
+      - type: mae
+        weight: 1.0
+      - type: mse
+        weight: 0.05
+    metrics:
+      - type: mae
+      - type: rmse
+    optimizer:
+      type: AdamW
+      lr: 0.0005
+      weight_decay: 0.0001
+    scheduler:
+      type: CosineAnnealingLR
+      T_max: 3
+    validate_every: 1
+    gradient_clip_val: 5.0
+
+  - name: pems_bay_ten_percent_finetune
+    epochs: 3
+    reset_data: true
+    data:
+      type: WindowDataModule
+      dataset_key: PEMS-BAY
+      input_len: 12
+      output_len: 12
+      batch_size: 8
+      split:
+        - 0.6
+        - 0.2
+        - 0.2
+      scaler:
+        type: standard
+      split_mode: basicts
+    load_from: opencity_xd_mixed
+    strict_load: true
+    few_shot_ratio: 0.10
+    freeze:
+      - all
+    unfreeze:
+      - forecast_head.*
+      - blocks.2.*
+      - norm.weight
+      - norm.bias
+    task:
+      type: ForecastingTask
+      primary_supervision_space: denormalized
+      basicts_scale_logging: true
+    losses:
+      - type: mae
+        weight: 1.0
+      - type: mse
+        weight: 0.05
+    metrics:
+      - type: mae
+      - type: rmse
+    optimizer:
+      type: AdamW
+      lr: 0.0005
+      weight_decay: 0.0001
+    scheduler:
+      type: CosineAnnealingLR
+      T_max: 3
+    validate_every: 1
+    gradient_clip_val: 5.0

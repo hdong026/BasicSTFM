@@ -721,11 +721,17 @@ class MultiStageTrainer:
             raise RuntimeError("Model is not initialized")
 
         model = unwrap_model(self.model)
-        if stage.load_method in {"checkpoint", "state_dict", "stable_trunk_channel_inflate"}:
+        if stage.load_method in {
+            "checkpoint",
+            "state_dict",
+            "stable_trunk_channel_inflate",
+            "foundation_channel_inflate",
+        }:
             stable_trunk_inflate = (
                 stage.load_method == "stable_trunk_channel_inflate"
                 or stage.allow_stable_trunk_channel_inflate
             )
+            foundation_inflate = stage.load_method == "foundation_channel_inflate"
             return load_checkpoint(
                 path,
                 model,
@@ -735,6 +741,7 @@ class MultiStageTrainer:
                 map_location=str(self.device),
                 restore_rng=restore_rng,
                 stable_trunk_channel_inflate=stable_trunk_inflate,
+                foundation_channel_inflate=foundation_inflate,
             )
 
         loader = getattr(model, stage.load_method, None)

@@ -203,6 +203,40 @@ class CheckpointTest(unittest.TestCase):
                 stable_trunk_channel_inflate=True,
             )
 
+    def test_foundation_channel_inflate_opencity_value_proj(self):
+        from basicstfm.models.foundation.opencity import OpenCityFoundationModel
+
+        pre = OpenCityFoundationModel(
+            num_nodes=1,
+            input_dim=1,
+            output_dim=1,
+            input_len=12,
+            output_len=12,
+            hidden_dim=32,
+            num_layers=2,
+            num_heads=4,
+            ffn_dim=64,
+            max_num_nodes=8,
+        )
+        post = OpenCityFoundationModel(
+            num_nodes=1,
+            input_dim=18,
+            output_dim=18,
+            input_len=12,
+            output_len=12,
+            hidden_dim=32,
+            num_layers=2,
+            num_heads=4,
+            ffn_dim=64,
+            max_num_nodes=8,
+        )
+        ck = pre.state_dict()
+        adapted = adapt_checkpoint_state_dict(post, ck, foundation_channel_inflate=True)
+        post.load_state_dict(adapted, strict=True)
+        w = post.value_proj.weight
+        self.assertEqual(tuple(w.shape), (32, 18))
+        self.assertTrue(torch.allclose(w[:, 0], ck["value_proj.weight"][:, 0].to(w.dtype)))
+
     def test_restore_rng_state_accepts_python_lists(self):
         state = {"torch": torch.get_rng_state().tolist()}
         restore_rng_state(state)

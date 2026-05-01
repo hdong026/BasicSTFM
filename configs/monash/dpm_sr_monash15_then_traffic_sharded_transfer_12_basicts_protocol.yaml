@@ -365,6 +365,63 @@ pipeline:
       T_max: 3
     validate_every: 1
     gradient_clip_val: 5.0
+  - name: metr_la_ten_percent_mechanism_tuning
+    epochs: 3
+    reset_data: true
+    data:
+      type: WindowDataModule
+      dataset_key: METR-LA
+      input_len: 12
+      output_len: 12
+      batch_size: 8
+      split:
+      - 0.6
+      - 0.2
+      - 0.2
+      scaler:
+        type: standard
+      split_mode: basicts
+    load_from: srd_xd_joint
+    strict_load: true
+    few_shot_ratio: 0.10
+    freeze:
+    - all
+    unfreeze:
+    - residual_event_encoder.*
+    - diffusion_mechanism_learner.*
+    - fusion_predictor.*
+    - calibration_head.*
+    - stable_trunk.forecast_head.*
+    task:
+      type: StableResidualForecastingTask
+      phase: joint
+      model_mode: forecast
+      stable_target: lowfreq
+      final_weight: 1.0
+      stable_weight: 0.2
+      residual_weight: 0.2
+      spectral_weight: 0.02
+      cross_cov_weight: 0.0
+      use_revin: false
+      primary_supervision_space: denormalized
+      basicts_scale_logging: true
+    losses:
+    - type: mae
+      weight: 1.0
+    - type: mse
+      weight: 0.05
+    metrics:
+    - type: mae
+    - type: rmse
+    optimizer:
+      type: AdamW
+      lr: 0.0005
+      weight_decay: 0.0001
+    scheduler:
+      type: CosineAnnealingLR
+      T_max: 3
+    validate_every: 1
+    gradient_clip_val: 5.0
   - name: pems03_zero_shot
     eval_only: true
     epochs: 0
@@ -415,6 +472,63 @@ pipeline:
     load_from: srd_xd_joint
     strict_load: true
     few_shot_ratio: 0.05
+    freeze:
+    - all
+    unfreeze:
+    - residual_event_encoder.*
+    - diffusion_mechanism_learner.*
+    - fusion_predictor.*
+    - calibration_head.*
+    - stable_trunk.forecast_head.*
+    task:
+      type: StableResidualForecastingTask
+      phase: joint
+      model_mode: forecast
+      stable_target: lowfreq
+      final_weight: 1.0
+      stable_weight: 0.2
+      residual_weight: 0.2
+      spectral_weight: 0.02
+      cross_cov_weight: 0.0
+      use_revin: false
+      primary_supervision_space: denormalized
+      basicts_scale_logging: true
+    losses:
+    - type: mae
+      weight: 1.0
+    - type: mse
+      weight: 0.05
+    metrics:
+    - type: mae
+    - type: rmse
+    optimizer:
+      type: AdamW
+      lr: 0.0005
+      weight_decay: 0.0001
+    scheduler:
+      type: CosineAnnealingLR
+      T_max: 3
+    validate_every: 1
+    gradient_clip_val: 5.0
+  - name: pems03_ten_percent_mechanism_tuning
+    epochs: 3
+    reset_data: true
+    data:
+      type: WindowDataModule
+      dataset_key: PEMS03
+      input_len: 12
+      output_len: 12
+      batch_size: 8
+      split:
+      - 0.6
+      - 0.2
+      - 0.2
+      scaler:
+        type: standard
+      split_mode: basicts
+    load_from: srd_xd_joint
+    strict_load: true
+    few_shot_ratio: 0.10
     freeze:
     - all
     unfreeze:
@@ -541,6 +655,63 @@ pipeline:
       T_max: 3
     validate_every: 1
     gradient_clip_val: 5.0
+  - name: pems04_ten_percent_mechanism_tuning
+    epochs: 3
+    reset_data: true
+    data:
+      type: WindowDataModule
+      dataset_key: PEMS04
+      input_len: 12
+      output_len: 12
+      batch_size: 8
+      split:
+      - 0.6
+      - 0.2
+      - 0.2
+      scaler:
+        type: standard
+      split_mode: basicts
+    load_from: srd_xd_joint
+    strict_load: true
+    few_shot_ratio: 0.10
+    freeze:
+    - all
+    unfreeze:
+    - residual_event_encoder.*
+    - diffusion_mechanism_learner.*
+    - fusion_predictor.*
+    - calibration_head.*
+    - stable_trunk.forecast_head.*
+    task:
+      type: StableResidualForecastingTask
+      phase: joint
+      model_mode: forecast
+      stable_target: lowfreq
+      final_weight: 1.0
+      stable_weight: 0.2
+      residual_weight: 0.2
+      spectral_weight: 0.02
+      cross_cov_weight: 0.0
+      use_revin: false
+      primary_supervision_space: denormalized
+      basicts_scale_logging: true
+    losses:
+    - type: mae
+      weight: 1.0
+    - type: mse
+      weight: 0.05
+    metrics:
+    - type: mae
+    - type: rmse
+    optimizer:
+      type: AdamW
+      lr: 0.0005
+      weight_decay: 0.0001
+    scheduler:
+      type: CosineAnnealingLR
+      T_max: 3
+    validate_every: 1
+    gradient_clip_val: 5.0
   - name: pems07_zero_shot
     eval_only: true
     epochs: 0
@@ -629,6 +800,63 @@ pipeline:
       T_max: 3
     validate_every: 1
     gradient_clip_val: 5.0
+  - name: pems07_ten_percent_mechanism_tuning
+    epochs: 3
+    reset_data: true
+    data:
+      type: WindowDataModule
+      dataset_key: PEMS07
+      input_len: 12
+      output_len: 12
+      batch_size: 8
+      split:
+      - 0.6
+      - 0.2
+      - 0.2
+      scaler:
+        type: standard
+      split_mode: basicts
+    load_from: srd_xd_joint
+    strict_load: true
+    few_shot_ratio: 0.10
+    freeze:
+    - all
+    unfreeze:
+    - residual_event_encoder.*
+    - diffusion_mechanism_learner.*
+    - fusion_predictor.*
+    - calibration_head.*
+    - stable_trunk.forecast_head.*
+    task:
+      type: StableResidualForecastingTask
+      phase: joint
+      model_mode: forecast
+      stable_target: lowfreq
+      final_weight: 1.0
+      stable_weight: 0.2
+      residual_weight: 0.2
+      spectral_weight: 0.02
+      cross_cov_weight: 0.0
+      use_revin: false
+      primary_supervision_space: denormalized
+      basicts_scale_logging: true
+    losses:
+    - type: mae
+      weight: 1.0
+    - type: mse
+      weight: 0.05
+    metrics:
+    - type: mae
+    - type: rmse
+    optimizer:
+      type: AdamW
+      lr: 0.0005
+      weight_decay: 0.0001
+    scheduler:
+      type: CosineAnnealingLR
+      T_max: 3
+    validate_every: 1
+    gradient_clip_val: 5.0
   - name: pems08_zero_shot
     eval_only: true
     epochs: 0
@@ -679,6 +907,63 @@ pipeline:
     load_from: srd_xd_joint
     strict_load: true
     few_shot_ratio: 0.05
+    freeze:
+    - all
+    unfreeze:
+    - residual_event_encoder.*
+    - diffusion_mechanism_learner.*
+    - fusion_predictor.*
+    - calibration_head.*
+    - stable_trunk.forecast_head.*
+    task:
+      type: StableResidualForecastingTask
+      phase: joint
+      model_mode: forecast
+      stable_target: lowfreq
+      final_weight: 1.0
+      stable_weight: 0.2
+      residual_weight: 0.2
+      spectral_weight: 0.02
+      cross_cov_weight: 0.0
+      use_revin: false
+      primary_supervision_space: denormalized
+      basicts_scale_logging: true
+    losses:
+    - type: mae
+      weight: 1.0
+    - type: mse
+      weight: 0.05
+    metrics:
+    - type: mae
+    - type: rmse
+    optimizer:
+      type: AdamW
+      lr: 0.0005
+      weight_decay: 0.0001
+    scheduler:
+      type: CosineAnnealingLR
+      T_max: 3
+    validate_every: 1
+    gradient_clip_val: 5.0
+  - name: pems08_ten_percent_mechanism_tuning
+    epochs: 3
+    reset_data: true
+    data:
+      type: WindowDataModule
+      dataset_key: PEMS08
+      input_len: 12
+      output_len: 12
+      batch_size: 8
+      split:
+      - 0.6
+      - 0.2
+      - 0.2
+      scaler:
+        type: standard
+      split_mode: basicts
+    load_from: srd_xd_joint
+    strict_load: true
+    few_shot_ratio: 0.10
     freeze:
     - all
     unfreeze:
@@ -861,6 +1146,63 @@ pipeline:
     load_from: srd_xd_joint
     strict_load: true
     few_shot_ratio: 0.05
+    freeze:
+    - all
+    unfreeze:
+    - residual_event_encoder.*
+    - diffusion_mechanism_learner.*
+    - fusion_predictor.*
+    - calibration_head.*
+    - stable_trunk.forecast_head.*
+    task:
+      type: StableResidualForecastingTask
+      phase: joint
+      model_mode: forecast
+      stable_target: lowfreq
+      final_weight: 1.0
+      stable_weight: 0.2
+      residual_weight: 0.2
+      spectral_weight: 0.02
+      cross_cov_weight: 0.0
+      use_revin: false
+      primary_supervision_space: denormalized
+      basicts_scale_logging: true
+    losses:
+    - type: mae
+      weight: 1.0
+    - type: mse
+      weight: 0.05
+    metrics:
+    - type: mae
+    - type: rmse
+    optimizer:
+      type: AdamW
+      lr: 0.0005
+      weight_decay: 0.0001
+    scheduler:
+      type: CosineAnnealingLR
+      T_max: 3
+    validate_every: 1
+    gradient_clip_val: 5.0
+  - name: pems_bay_ten_percent_mechanism_tuning
+    epochs: 3
+    reset_data: true
+    data:
+      type: WindowDataModule
+      dataset_key: PEMS-BAY
+      input_len: 12
+      output_len: 12
+      batch_size: 8
+      split:
+      - 0.6
+      - 0.2
+      - 0.2
+      scaler:
+        type: standard
+      split_mode: basicts
+    load_from: srd_xd_joint
+    strict_load: true
+    few_shot_ratio: 0.10
     freeze:
     - all
     unfreeze:

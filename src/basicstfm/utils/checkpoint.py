@@ -342,6 +342,161 @@ def _log_stable_trunk_inflate_line(
         logger.info("inflated stable_trunk.forecast_head: %d -> %d", c_old, c_new)
 
 
+def _foundation_forecast_head_row_expand_weight(
+    tensor: torch.Tensor,
+    param: torch.Tensor,
+) -> Optional[torch.Tensor]:
+    """Expand forecast head out-features (e.g. ``output_len * 1`` -> ``output_len * C``)."""
+
+    if not (
+        tensor.ndim == 2
+        and param.ndim == 2
+        and tensor.shape[1] == param.shape[1]
+    ):
+        return None
+    ck_rows = int(tensor.shape[0])
+    m_rows = int(param.shape[0])
+    if m_rows <= ck_rows or m_rows % ck_rows != 0:
+        return None
+    factor = m_rows // ck_rows
+    if factor <= 1:
+        return None
+    buf = param.clone()
+    src = tensor.to(device=buf.device, dtype=buf.dtype)
+    for t in range(ck_rows):
+        buf[t * factor, :].copy_(src[t, :])
+        for c in range(1, factor):
+            buf[t * factor + c, :].copy_(param[t * factor + c, :] * 0.01)
+    return buf
+
+
+def _foundation_forecast_head_row_expand_bias(
+    tensor: torch.Tensor,
+    param: torch.Tensor,
+) -> Optional[torch.Tensor]:
+    if not (tensor.ndim == 1 and param.ndim == 1):
+        return None
+    ck_len = int(tensor.shape[0])
+    m_len = int(param.shape[0])
+    if m_len <= ck_len or m_len % ck_len != 0:
+        return None
+    factor = m_len // ck_len
+    if factor <= 1:
+        return None
+    buf = param.clone()
+    src = tensor.to(device=buf.device, dtype=buf.dtype)
+    for t in range(ck_len):
+        buf[t * factor].copy_(src[t])
+        for c in range(1, factor):
+            buf[t * factor + c].copy_(param[t * factor + c] * 0.01)
+    return buf
+
+
+def _foundation_is_reconstruction_head_weight(name: str) -> bool:
+    return "reconstruction_head" in name and name.endswith(".weight")
+
+
+def _foundation_is_reconstruction_head_bias(name: str) -> bool:
+    return "reconstruction_head" in name and name.endswith(".bias")
+
+
+def _foundation_channel_inflate_pair(
+    name: str,
+    tensor: torch.Tensor,
+    param: torch.Tensor,
+    model: torch.nn.Module,
+) -> Optional[_InflateOutcome]:
+    """Expand Monash (``C==1``) checkpoints into mixed-domain models for foundation adapters."""
+
+    if name.endswith("value_proj.weight"):
+        return _wrap_optional(_inflate_linear_in_features_ck(tensor, param))
+
+    if _foundation_is_reconstruction_head_weight(name):
+        maybe = _inflate_reconstruction_head_weight_ck(tensor, param)
+        if maybe is not None:
+            return _InflateOutcome(maybe, True)
+    if _foundation_is_reconstruction_head_bias(name):
+        maybe = _inflate_reconstruction_head_bias_ck(tensor, param)
+        if maybe is not None:
+            return _InflateOutcome(maybe, True)
+
+    forecast_weight = False
+    forecast_bias = False
+    fh = getattr(model, "forecast_head", None)
+    if isinstance(fh, torch.nn.Sequential):
+        last_idx = None
+        for idx in range(len(fh) - 1, -1, -1):
+            if isinstance(fh[idx], torch.nn.Linear):
+                last_idx = idx
+                break
+        if last_idx is not None:
+            forecast_weight = name == f"forecast_head.{last_idx}.weight"
+            forecast_bias = name == f"forecast_head.{last_idx}.bias"
+    elif isinstance(fh, torch.nn.Linear):
+        forecast_weight = name == "forecast_head.weight"
+        forecast_bias = name == "forecast_head.bias"
+
+    if forecast_weight:
+        maybe = _foundation_forecast_head_row_expand_weight(tensor, param)
+        if maybe is not None:
+            logger.info(
+                "inflated %s forecast rows: %d -> %d",
+                name,
+                int(tensor.shape[0]),
+                int(param.shape[0]),
+            )
+            return _InflateOutcome(maybe, True)
+    if forecast_bias:
+        maybe = _foundation_forecast_head_row_expand_bias(tensor, param)
+        if maybe is not None:
+            logger.info(
+                "inflated %s forecast bias len: %d -> %d",
+                name,
+                int(tensor.shape[0]),
+                int(param.shape[0]),
+            )
+            return _InflateOutcome(maybe, True)
+
+    # FactoST / single-module heads: never silent-mismatch patch/forecast linear layers.
+    if name in {"patch_decoder.weight", "patch_decoder.bias"} and tensor.shape != param.shape:
+        logger.warning(
+            "foundation_channel_inflate: %s checkpoint shape %s vs model %s; keeping model initialization",
+            name,
+            tuple(tensor.shape),
+            tuple(param.shape),
+        )
+        return _InflateOutcome(param.clone(), False)
+    if name in {"forecast_head.weight", "forecast_head.bias"} and tensor.shape != param.shape:
+        maybe_w = (
+            _foundation_forecast_head_row_expand_weight(tensor, param)
+            if name.endswith("weight")
+            else None
+        )
+        maybe_b = (
+            _foundation_forecast_head_row_expand_bias(tensor, param)
+            if name.endswith("bias")
+            else None
+        )
+        maybe = maybe_w or maybe_b
+        if maybe is not None:
+            logger.info(
+                "inflated FactoST %s: %s -> %s",
+                name,
+                tuple(tensor.shape),
+                tuple(param.shape),
+            )
+            return _InflateOutcome(maybe, True)
+        logger.warning(
+            "foundation_channel_inflate: %s checkpoint shape %s vs model %s; keeping model initialization",
+            name,
+            tuple(tensor.shape),
+            tuple(param.shape),
+        )
+        return _InflateOutcome(param.clone(), False)
+
+    return None
+
+
 def _stable_trunk_channel_inflate_pair(
     name: str,
     tensor: torch.Tensor,
@@ -402,6 +557,7 @@ def adapt_checkpoint_state_dict(
     checkpoint_state: Dict[str, torch.Tensor],
     *,
     stable_trunk_channel_inflate: bool = False,
+    foundation_channel_inflate: bool = False,
 ) -> Dict[str, torch.Tensor]:
     """Align a checkpoint to the current model, expanding small node/channel embedding tables.
 
@@ -415,11 +571,17 @@ def adapt_checkpoint_state_dict(
     ``fusion_predictor.additive_logit`` last dim matches ``output_dim``; other ``fusion_predictor``
     tensors with incompatible shapes keep model initialization (with a warning);
     ``calibration_head`` square weights use top-left block copy when ``output_dim`` changes.
+
+    With ``foundation_channel_inflate=True``, OpenCity / UniST / FactoST-style checkpoints trained
+    with ``input_dim==1`` gain channel-expanded ``value_proj``, reconstruction head, and forecast head
+    rows when loading into mixed-domain ``input_dim==C``. FactoST ``patch_decoder`` / ``forecast_head``
+    mismatches that cannot be expanded emit an explicit warning and keep the current initialization.
     """
 
     model_state = model.state_dict()
     out: Dict[str, Any] = {}
     inflated_keys: list[str] = []
+    kept_init_keys: list[str] = []
     unchanged_keys: list[str] = []
     ck_miss = [k for k in model_state if k not in checkpoint_state]
     ck_unexp = [k for k in checkpoint_state if k not in model_state]
@@ -445,6 +607,23 @@ def adapt_checkpoint_state_dict(
                 if outcome.used_checkpoint:
                     inflated_keys.append(name)
                     _log_stable_trunk_inflate_line(name, tensor, param, model)
+                else:
+                    kept_init_keys.append(name)
+                continue
+
+        if foundation_channel_inflate:
+            outcome = _foundation_channel_inflate_pair(name, tensor, param, model)
+            if outcome is not None:
+                if outcome.tensor.shape != param.shape:
+                    raise RuntimeError(
+                        f"Internal inflate error for {name!r}: got {tuple(outcome.tensor.shape)} "
+                        f"expected model {tuple(param.shape)}"
+                    )
+                out[name] = outcome.tensor
+                if outcome.used_checkpoint:
+                    inflated_keys.append(name)
+                else:
+                    kept_init_keys.append(name)
                 continue
 
         if tensor.shape == param.shape:
@@ -471,9 +650,10 @@ def adapt_checkpoint_state_dict(
                 f"vs model {tuple(param.shape)}"
             )
 
-    if stable_trunk_channel_inflate:
+    if stable_trunk_channel_inflate or foundation_channel_inflate:
         logger.info("loaded unchanged keys count: %d", len(unchanged_keys))
         logger.info("inflated keys count: %d", len(inflated_keys))
+        logger.info("kept model init (checkpoint skipped) count: %d", len(kept_init_keys))
         logger.info("missing keys (not in checkpoint): %d", len(ck_miss))
         logger.info("unexpected keys (not in model): %d", len(ck_unexp))
 
@@ -509,6 +689,7 @@ def load_checkpoint(
     map_location: str = "cpu",
     restore_rng: bool = False,
     stable_trunk_channel_inflate: bool = False,
+    foundation_channel_inflate: bool = False,
 ) -> Dict[str, Any]:
     ckpt = torch_load(path, map_location=map_location)
     state_dict = ckpt.get("model", ckpt)
@@ -517,6 +698,7 @@ def load_checkpoint(
             model,
             state_dict,
             stable_trunk_channel_inflate=stable_trunk_channel_inflate,
+            foundation_channel_inflate=foundation_channel_inflate,
         )
     except RuntimeError as exc:
         raise RuntimeError(

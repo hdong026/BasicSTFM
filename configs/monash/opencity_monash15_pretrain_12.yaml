@@ -1,0 +1,166 @@
+# Standalone Monash-15 warmup for OpenCity (produces checkpoint for transfer or OPENCITY_MONASH15_CKPT).
+# Data: scripts/data/prepare_monash15.py -> data/Monash15/<name>/
+
+experiment_name: opencity_monash15_pretrain_12
+seed: 42
+
+trainer:
+  type: MultiStageTrainer
+  device: auto
+  work_dir: runs/opencity_monash15_pretrain_12
+  log_every: 50
+
+# Registry + groups copied from dpm_sr_monash15_stable_pretrain_12 (same Monash15 sources).
+
+dataset_registry:
+  australian_electricity_demand:
+    name: australian_electricity_demand
+    monash_root: data/Monash15/australian_electricity_demand
+    batch_size: 4
+  london_smart_meters:
+    name: london_smart_meters
+    monash_root: data/Monash15/london_smart_meters
+    batch_size: 4
+  solar_10_minutes:
+    name: solar_10_minutes
+    monash_root: data/Monash15/solar_10_minutes
+    batch_size: 4
+  solar_4_seconds:
+    name: solar_4_seconds
+    monash_root: data/Monash15/solar_4_seconds
+    batch_size: 4
+  wind_farms_minutely:
+    name: wind_farms_minutely
+    monash_root: data/Monash15/wind_farms_minutely
+    batch_size: 4
+  wind_4_seconds:
+    name: wind_4_seconds
+    monash_root: data/Monash15/wind_4_seconds
+    batch_size: 4
+  weather:
+    name: weather
+    monash_root: data/Monash15/weather
+    batch_size: 4
+  kdd_cup_2018:
+    name: kdd_cup_2018
+    monash_root: data/Monash15/kdd_cup_2018
+    batch_size: 4
+  temperature_rain:
+    name: temperature_rain
+    monash_root: data/Monash15/temperature_rain
+    batch_size: 4
+  saugeenday:
+    name: saugeenday
+    monash_root: data/Monash15/saugeenday
+    batch_size: 4
+  sunspot:
+    name: sunspot
+    monash_root: data/Monash15/sunspot
+    batch_size: 4
+  pedestrian_counts:
+    name: pedestrian_counts
+    monash_root: data/Monash15/pedestrian_counts
+    batch_size: 4
+  kaggle_web_traffic:
+    name: kaggle_web_traffic
+    monash_root: data/Monash15/kaggle_web_traffic
+    batch_size: 4
+  bitcoin:
+    name: bitcoin
+    monash_root: data/Monash15/bitcoin
+    batch_size: 4
+  us_births:
+    name: us_births
+    monash_root: data/Monash15/us_births
+    batch_size: 4
+
+dataset_groups:
+  monash15_sources:
+    - australian_electricity_demand
+    - london_smart_meters
+    - solar_10_minutes
+    - solar_4_seconds
+    - wind_farms_minutely
+    - wind_4_seconds
+    - weather
+    - kdd_cup_2018
+    - temperature_rain
+    - saugeenday
+    - sunspot
+    - pedestrian_counts
+    - kaggle_web_traffic
+    - bitcoin
+    - us_births
+
+data:
+  type: MonashMultiDatasetWindowDataModule
+  dataset_group: monash15_sources
+  input_len: 12
+  output_len: 12
+  batch_size: 4
+  split:
+    - 0.7
+    - 0.1
+    - 0.2
+  scaler:
+    type: identity
+  norm_mode: instance_standard
+
+model:
+  type: OpenCityFoundationModel
+  num_nodes: auto
+  input_dim: auto
+  output_dim: auto
+  input_len: auto
+  output_len: auto
+  max_num_nodes: 1024
+  hidden_dim: 128
+  num_layers: 3
+  num_heads: 4
+  ffn_dim: 256
+  dropout: 0.1
+
+pipeline:
+  stages:
+    - name: opencity_monash15_warmup
+      save_artifact: opencity_monash15_warmup
+      reset_data: true
+      data:
+        type: MonashMultiDatasetWindowDataModule
+        dataset_group: monash15_sources
+        input_len: 12
+        output_len: 12
+        num_workers: 2
+        train_strategy: round_robin
+        eval_strategy: per_dataset
+        steps_per_epoch: 10000
+        max_val_windows: 256
+        max_test_windows: 512
+        split:
+          - 0.7
+          - 0.1
+          - 0.2
+        scaler:
+          type: identity
+        norm_mode: instance_standard
+      epochs: 4
+      task:
+        type: ForecastingTask
+        primary_supervision_space: normalized
+      losses:
+        - type: mae
+          weight: 1.0
+        - type: mse
+          weight: 0.05
+      metrics:
+        - type: mae
+        - type: rmse
+      optimizer:
+        type: AdamW
+        lr: 0.001
+        weight_decay: 0.0001
+      scheduler:
+        type: CosineAnnealingLR
+        T_max: 4
+      validate_every: 1
+      gradient_clip_val: 5.0

@@ -133,3 +133,73 @@ class JointReconstructionForecastTask(Task):
             "target": target.detach(),
             "mask": None if forecast_mask is None else forecast_mask.detach(),
         }
+
+
+@TASKS.register("FactoSTUTPTask")
+class FactoSTUTPTask(Task):
+    """Randomized spatio-temporal masking with reconstruction-only loss (FactoST-v2 UTP-style).
+
+    Unlike :class:`JointReconstructionForecastTask`, this task **does not** apply a parallel
+    forecasting branch or spectral regularizers — only masked reconstruction in scaled space
+    (with the usual batch inverse transform for logging parity).
+    """
+
+    def __init__(
+        self,
+        input_key: str = "x",
+        reconstruction_key: str = "reconstruction",
+        mask_ratio: float = 0.5,
+        mask_value: float = 0.0,
+        mask_strategy: str = "random",
+        mask_strategies: Optional[Sequence[str]] = None,
+        model_mode: str = "reconstruct",
+    ) -> None:
+        if not 0.0 < mask_ratio < 1.0:
+            raise ValueError("mask_ratio must be between 0 and 1")
+        self.input_key = input_key
+        self.reconstruction_key = reconstruction_key
+        self.mask_ratio = float(mask_ratio)
+        self.mask_value = float(mask_value)
+        self.mask_strategy = mask_strategy
+        self.mask_strategies = list(mask_strategies) if mask_strategies is not None else None
+        self.model_mode = str(model_mode)
+
+    def step(self, model: torch.nn.Module, batch: Dict[str, Any], losses, device: torch.device):
+        batch = move_to_device(batch, device)
+        raw_x = batch[self.input_key]
+        x = self.transform(raw_x, batch=batch)
+
+        sampled_mask = sample_spatiotemporal_mask(
+            x,
+            self.mask_ratio,
+            strategy=self.mask_strategy,
+            strategies=self.mask_strategies,
+        )
+        recon_mask = self.merge_masks(sampled_mask, batch.get("x_mask"))
+        masked_x = x.masked_fill(recon_mask, self.mask_value)
+
+        outputs = model(
+            masked_x,
+            graph=batch.get("graph"),
+            mask=recon_mask,
+            mode=self.model_mode,
+        )
+        if not isinstance(outputs, dict):
+            raise TypeError("FactoSTUTPTask expects model outputs to be a dict")
+
+        recon = self.inverse_transform(outputs[self.reconstruction_key], batch=batch)
+        raw_x_aligned, recon_mask = self.align_prediction_target(recon, raw_x, recon_mask)
+        recon_loss_out = losses(recon, raw_x_aligned, mask=recon_mask)
+
+        logs: Dict[str, torch.Tensor] = {
+            f"reconstruction/{k}": v.detach() for k, v in recon_loss_out["logs"].items()
+        }
+        logs["loss/total"] = recon_loss_out["loss"].detach()
+
+        return {
+            "loss": recon_loss_out["loss"],
+            "logs": logs,
+            "pred": recon.detach(),
+            "target": raw_x_aligned.detach(),
+            "mask": None if recon_mask is None else recon_mask.detach(),
+        }
