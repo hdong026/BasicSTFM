@@ -392,11 +392,25 @@ def _foundation_forecast_head_row_expand_bias(
     return buf
 
 
-def _foundation_is_reconstruction_head_weight(name: str) -> bool:
+def _foundation_is_reconstruction_head_weight(name: str, model: torch.nn.Module) -> bool:
+    """True only for the last Linear's weight in ``reconstruction_head`` (avoid middle layers)."""
+
+    rh = getattr(model, "reconstruction_head", None)
+    if isinstance(rh, torch.nn.Sequential):
+        for idx in range(len(rh) - 1, -1, -1):
+            if isinstance(rh[idx], torch.nn.Linear):
+                return name == f"reconstruction_head.{idx}.weight"
+        return False
     return "reconstruction_head" in name and name.endswith(".weight")
 
 
-def _foundation_is_reconstruction_head_bias(name: str) -> bool:
+def _foundation_is_reconstruction_head_bias(name: str, model: torch.nn.Module) -> bool:
+    rh = getattr(model, "reconstruction_head", None)
+    if isinstance(rh, torch.nn.Sequential):
+        for idx in range(len(rh) - 1, -1, -1):
+            if isinstance(rh[idx], torch.nn.Linear):
+                return name == f"reconstruction_head.{idx}.bias"
+        return False
     return "reconstruction_head" in name and name.endswith(".bias")
 
 
@@ -411,11 +425,11 @@ def _foundation_channel_inflate_pair(
     if name.endswith("value_proj.weight"):
         return _wrap_optional(_inflate_linear_in_features_ck(tensor, param))
 
-    if _foundation_is_reconstruction_head_weight(name):
+    if _foundation_is_reconstruction_head_weight(name, model):
         maybe = _inflate_reconstruction_head_weight_ck(tensor, param)
         if maybe is not None:
             return _InflateOutcome(maybe, True)
-    if _foundation_is_reconstruction_head_bias(name):
+    if _foundation_is_reconstruction_head_bias(name, model):
         maybe = _inflate_reconstruction_head_bias_ck(tensor, param)
         if maybe is not None:
             return _InflateOutcome(maybe, True)

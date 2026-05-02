@@ -1,4 +1,6 @@
-# UniST budget-matched: masked 50k + prompt(source) 50k; zero-shot loads prompt artifact.
+# UniST budget-matched: Monash MAE -> masked mixed -> prompt+MaskedForecastCompletion on source.
+# Traffic eval uses MaskedForecastCompletionTask (history + masked future -> reconstruct suffix);
+# forecast_head is not used on the target path.
 
 experiment_name: unist_monash15_then_mixed_12_basicts_budget
 seed: 42
@@ -200,6 +202,8 @@ pipeline:
         type: identity
       norm_mode: instance_standard
     epochs: 4
+    model:
+      use_prompt: false
     task:
       type: MaskedReconstructionTask
       mask_ratio: 0.25
@@ -283,8 +287,11 @@ pipeline:
         type: standard
     epochs: 5
     task:
-      type: MaskedReconstructionTask
-      mask_ratio: 0.25
+      type: MaskedForecastCompletionTask
+      input_key: x
+      target_key: y
+      output_key: reconstruction
+      model_mode: reconstruct
     losses:
     - type: mse
     metrics:
@@ -322,11 +329,11 @@ pipeline:
     load_from: unist_xd_prompt_source
     strict_load: true
     task:
-      type: ForecastingTask
-      model_mode: zero_shot
-      primary_supervision_space: denormalized
-      basicts_scale_logging: true
-      use_revin: false
+      type: MaskedForecastCompletionTask
+      input_key: x
+      target_key: y
+      output_key: reconstruction
+      model_mode: reconstruct
     losses:
     - type: mae
     metrics:
@@ -357,13 +364,13 @@ pipeline:
     - all
     unfreeze:
     - prompt.*
-    - forecast_head.*
     - reconstruction_head.*
     task:
-      type: ForecastingTask
-      primary_supervision_space: denormalized
-      basicts_scale_logging: true
-      use_revin: false
+      type: MaskedForecastCompletionTask
+      input_key: x
+      target_key: y
+      output_key: reconstruction
+      model_mode: reconstruct
     losses:
     - type: mae
       weight: 1.0
@@ -408,13 +415,13 @@ pipeline:
     - all
     unfreeze:
     - prompt.*
-    - forecast_head.*
     - reconstruction_head.*
     task:
-      type: ForecastingTask
-      primary_supervision_space: denormalized
-      basicts_scale_logging: true
-      use_revin: false
+      type: MaskedForecastCompletionTask
+      input_key: x
+      target_key: y
+      output_key: reconstruction
+      model_mode: reconstruct
     losses:
     - type: mae
       weight: 1.0
@@ -456,11 +463,11 @@ pipeline:
     load_from: unist_xd_prompt_source
     strict_load: true
     task:
-      type: ForecastingTask
-      model_mode: zero_shot
-      primary_supervision_space: denormalized
-      basicts_scale_logging: true
-      use_revin: false
+      type: MaskedForecastCompletionTask
+      input_key: x
+      target_key: y
+      output_key: reconstruction
+      model_mode: reconstruct
     losses:
     - type: mae
     metrics:
@@ -491,13 +498,13 @@ pipeline:
     - all
     unfreeze:
     - prompt.*
-    - forecast_head.*
     - reconstruction_head.*
     task:
-      type: ForecastingTask
-      primary_supervision_space: denormalized
-      basicts_scale_logging: true
-      use_revin: false
+      type: MaskedForecastCompletionTask
+      input_key: x
+      target_key: y
+      output_key: reconstruction
+      model_mode: reconstruct
     losses:
     - type: mae
       weight: 1.0
@@ -542,13 +549,13 @@ pipeline:
     - all
     unfreeze:
     - prompt.*
-    - forecast_head.*
     - reconstruction_head.*
     task:
-      type: ForecastingTask
-      primary_supervision_space: denormalized
-      basicts_scale_logging: true
-      use_revin: false
+      type: MaskedForecastCompletionTask
+      input_key: x
+      target_key: y
+      output_key: reconstruction
+      model_mode: reconstruct
     losses:
     - type: mae
       weight: 1.0
@@ -590,11 +597,11 @@ pipeline:
     load_from: unist_xd_prompt_source
     strict_load: true
     task:
-      type: ForecastingTask
-      model_mode: zero_shot
-      primary_supervision_space: denormalized
-      basicts_scale_logging: true
-      use_revin: false
+      type: MaskedForecastCompletionTask
+      input_key: x
+      target_key: y
+      output_key: reconstruction
+      model_mode: reconstruct
     losses:
     - type: mae
     metrics:
@@ -625,13 +632,13 @@ pipeline:
     - all
     unfreeze:
     - prompt.*
-    - forecast_head.*
     - reconstruction_head.*
     task:
-      type: ForecastingTask
-      primary_supervision_space: denormalized
-      basicts_scale_logging: true
-      use_revin: false
+      type: MaskedForecastCompletionTask
+      input_key: x
+      target_key: y
+      output_key: reconstruction
+      model_mode: reconstruct
     losses:
     - type: mae
       weight: 1.0
@@ -676,13 +683,13 @@ pipeline:
     - all
     unfreeze:
     - prompt.*
-    - forecast_head.*
     - reconstruction_head.*
     task:
-      type: ForecastingTask
-      primary_supervision_space: denormalized
-      basicts_scale_logging: true
-      use_revin: false
+      type: MaskedForecastCompletionTask
+      input_key: x
+      target_key: y
+      output_key: reconstruction
+      model_mode: reconstruct
     losses:
     - type: mae
       weight: 1.0
@@ -724,11 +731,11 @@ pipeline:
     load_from: unist_xd_prompt_source
     strict_load: true
     task:
-      type: ForecastingTask
-      model_mode: zero_shot
-      primary_supervision_space: denormalized
-      basicts_scale_logging: true
-      use_revin: false
+      type: MaskedForecastCompletionTask
+      input_key: x
+      target_key: y
+      output_key: reconstruction
+      model_mode: reconstruct
     losses:
     - type: mae
     metrics:
@@ -759,13 +766,13 @@ pipeline:
     - all
     unfreeze:
     - prompt.*
-    - forecast_head.*
     - reconstruction_head.*
     task:
-      type: ForecastingTask
-      primary_supervision_space: denormalized
-      basicts_scale_logging: true
-      use_revin: false
+      type: MaskedForecastCompletionTask
+      input_key: x
+      target_key: y
+      output_key: reconstruction
+      model_mode: reconstruct
     losses:
     - type: mae
       weight: 1.0
@@ -810,13 +817,13 @@ pipeline:
     - all
     unfreeze:
     - prompt.*
-    - forecast_head.*
     - reconstruction_head.*
     task:
-      type: ForecastingTask
-      primary_supervision_space: denormalized
-      basicts_scale_logging: true
-      use_revin: false
+      type: MaskedForecastCompletionTask
+      input_key: x
+      target_key: y
+      output_key: reconstruction
+      model_mode: reconstruct
     losses:
     - type: mae
       weight: 1.0
@@ -858,11 +865,11 @@ pipeline:
     load_from: unist_xd_prompt_source
     strict_load: true
     task:
-      type: ForecastingTask
-      model_mode: zero_shot
-      primary_supervision_space: denormalized
-      basicts_scale_logging: true
-      use_revin: false
+      type: MaskedForecastCompletionTask
+      input_key: x
+      target_key: y
+      output_key: reconstruction
+      model_mode: reconstruct
     losses:
     - type: mae
     metrics:
@@ -893,13 +900,13 @@ pipeline:
     - all
     unfreeze:
     - prompt.*
-    - forecast_head.*
     - reconstruction_head.*
     task:
-      type: ForecastingTask
-      primary_supervision_space: denormalized
-      basicts_scale_logging: true
-      use_revin: false
+      type: MaskedForecastCompletionTask
+      input_key: x
+      target_key: y
+      output_key: reconstruction
+      model_mode: reconstruct
     losses:
     - type: mae
       weight: 1.0
@@ -944,13 +951,13 @@ pipeline:
     - all
     unfreeze:
     - prompt.*
-    - forecast_head.*
     - reconstruction_head.*
     task:
-      type: ForecastingTask
-      primary_supervision_space: denormalized
-      basicts_scale_logging: true
-      use_revin: false
+      type: MaskedForecastCompletionTask
+      input_key: x
+      target_key: y
+      output_key: reconstruction
+      model_mode: reconstruct
     losses:
     - type: mae
       weight: 1.0
@@ -992,11 +999,11 @@ pipeline:
     load_from: unist_xd_prompt_source
     strict_load: true
     task:
-      type: ForecastingTask
-      model_mode: zero_shot
-      primary_supervision_space: denormalized
-      basicts_scale_logging: true
-      use_revin: false
+      type: MaskedForecastCompletionTask
+      input_key: x
+      target_key: y
+      output_key: reconstruction
+      model_mode: reconstruct
     losses:
     - type: mae
     metrics:
@@ -1027,13 +1034,13 @@ pipeline:
     - all
     unfreeze:
     - prompt.*
-    - forecast_head.*
     - reconstruction_head.*
     task:
-      type: ForecastingTask
-      primary_supervision_space: denormalized
-      basicts_scale_logging: true
-      use_revin: false
+      type: MaskedForecastCompletionTask
+      input_key: x
+      target_key: y
+      output_key: reconstruction
+      model_mode: reconstruct
     losses:
     - type: mae
       weight: 1.0
@@ -1078,13 +1085,13 @@ pipeline:
     - all
     unfreeze:
     - prompt.*
-    - forecast_head.*
     - reconstruction_head.*
     task:
-      type: ForecastingTask
-      primary_supervision_space: denormalized
-      basicts_scale_logging: true
-      use_revin: false
+      type: MaskedForecastCompletionTask
+      input_key: x
+      target_key: y
+      output_key: reconstruction
+      model_mode: reconstruct
     losses:
     - type: mae
       weight: 1.0

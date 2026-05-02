@@ -253,6 +253,22 @@ def _patch_unist() -> None:
     cfg["experiment_name"] = "unist_monash15_then_mixed_12_basicts_budget"
     cfg["trainer"]["work_dir"] = "runs/unist_monash15_then_mixed_12_basicts_budget"
 
+    traffic = {
+        "METR-LA",
+        "PEMS03",
+        "PEMS04",
+        "PEMS07",
+        "PEMS08",
+        "PEMS-BAY",
+    }
+    completion_task = {
+        "type": "MaskedForecastCompletionTask",
+        "input_key": "x",
+        "target_key": "y",
+        "output_key": "reconstruction",
+        "model_mode": "reconstruct",
+    }
+
     stages: List[Dict[str, Any]] = cfg["pipeline"]["stages"]
     mixed_idx = next(i for i, st in enumerate(stages) if st["name"] == "mixed_domain_pretrain")
     mixed = deepcopy(stages[mixed_idx])
@@ -273,6 +289,9 @@ def _patch_unist() -> None:
     prompt_adapt["data"]["steps_per_epoch"] = MIXED_STEPS
     prompt_adapt["scheduler"]["T_max"] = 5
     prompt_adapt.setdefault("model", {})["use_prompt"] = True
+    prompt_adapt["task"] = {**completion_task}
+    prompt_adapt["losses"] = [{"type": "mse"}]
+    prompt_adapt["metrics"] = [{"type": "mae"}]
 
     new_stages = stages[:mixed_idx] + [mixed, prompt_adapt] + stages[mixed_idx + 1 :]
 
@@ -281,36 +300,39 @@ def _patch_unist() -> None:
             st["epochs"] = MONASH_EPOCHS
             st["data"]["steps_per_epoch"] = MONASH_STEPS
             st["scheduler"]["T_max"] = MONASH_EPOCHS
+            st.setdefault("model", {})["use_prompt"] = False
         n = st.get("name", "")
         lf = st.get("load_from")
         if isinstance(lf, str) and not lf.lstrip().startswith("${"):
             if lf in ("unist_xd_mixed", "unist_xd_masked_trunk"):
                 st["load_from"] = "unist_xd_prompt_source"
-        if "zero_shot" in n:
-            st.setdefault("model", {})["use_prompt"] = True
-        if "prompt_tune" in n:
-            st["epochs"] = FEWSHOT_EPOCHS
-            st["scheduler"]["T_max"] = FEWSHOT_EPOCHS
-            st["save_best_by"] = "val/metric/mae"
-            st["save_best"] = True
-            st["load_from"] = "unist_xd_prompt_source"
         data = st.get("data") or {}
-        if data.get("type") == "WindowDataModule" and data.get("dataset_key") in {
-            "METR-LA",
-            "PEMS03",
-            "PEMS04",
-            "PEMS07",
-            "PEMS08",
-            "PEMS-BAY",
-        }:
+        dk = data.get("dataset_key")
+        if data.get("type") == "WindowDataModule" and dk in traffic:
+            if "zero_shot" in n:
+                st.setdefault("model", {})["use_prompt"] = True
+                st["task"] = {**completion_task}
+                st["losses"] = [{"type": "mae"}]
+                st["metrics"] = [{"type": "mae"}, {"type": "rmse"}]
+            elif "prompt_tune" in n:
+                st["epochs"] = FEWSHOT_EPOCHS
+                st["scheduler"]["T_max"] = FEWSHOT_EPOCHS
+                st["save_best_by"] = "val/metric/mae"
+                st["save_best"] = True
+                st["load_from"] = "unist_xd_prompt_source"
+                st["task"] = {**completion_task}
+                st["freeze"] = ["all"]
+                st["unfreeze"] = ["prompt.*", "reconstruction_head.*"]
+        if "zero_shot" in n and data.get("type") == "WindowDataModule" and dk in traffic:
+            st.setdefault("model", {})["use_prompt"] = True
+        if data.get("type") == "WindowDataModule" and dk in traffic:
             data.pop("max_test_windows", None)
             data.pop("max_val_windows", None)
-        if st.get("task"):
-            _task_set_use_revin_false(st["task"])
 
     cfg["pipeline"]["stages"] = new_stages
     header = (
-        "# UniST budget-matched: masked 50k + prompt(source) 50k; zero-shot loads prompt artifact.\n\n"
+        "# UniST budget-matched: Monash MAE -> masked mixed -> prompt + MaskedForecastCompletion on source.\n"
+        "# Traffic: MaskedForecastCompletionTask (no ForecastingTask). Regenerate via this script.\n\n"
     )
     out = OUT_DIR / "unist_monash15_then_mixed_12_basicts_budget.yaml"
     _dump(cfg, out)
