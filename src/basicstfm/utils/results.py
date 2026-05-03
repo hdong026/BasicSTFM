@@ -152,6 +152,10 @@ def pretty_model_name(row: Mapping[str, Any]) -> str:
     }
     if experiment_name_raw in zs_fs_ckpt_eval:
         return zs_fs_ckpt_eval[experiment_name_raw]
+    if experiment_name_raw == "unist_monash15_then_mixed_12_basicts_budget_lite":
+        return "UniST-lite"
+    if experiment_name_raw == "unist_monash15_then_mixed_12_basicts_budget_lite_head":
+        return "UniST-lite+Head"
     experiment_mapping = {
         "opencity_traffic_benchmark": "OpenCity",
         "opencity_largest_transfer": "OpenCity-LargeST",
@@ -202,6 +206,12 @@ def pretty_model_name(row: Mapping[str, Any]) -> str:
     }
     if experiment_name in experiment_mapping:
         return experiment_mapping[experiment_name]
+
+    # Budget-matched BasicTS transfer (configs/budget_matched/dpm_sr*.yaml): same backbone, distinct labels.
+    if "dpm_srpp" in experiment_name:
+        return "DPM-SR++"
+    if experiment_name.startswith("dpm_sr"):
+        return "DPM-SR"
 
     model_type = str(row.get("model_type") or "")
     mapping = {

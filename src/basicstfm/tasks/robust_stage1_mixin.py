@@ -6,7 +6,7 @@ Used by StableResidualForecastingTaskV3 (DPM-v3 backbone) and StableResidualFore
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import torch
 import torch.nn.functional as F
@@ -18,6 +18,7 @@ from basicstfm.losses.stable_losses import (
     stable_forecast_mae_per_batch_item,
 )
 from basicstfm.tasks.base import move_to_device
+from basicstfm.utils.persistence_anchor import persistence_forecast_from_input
 from basicstfm.utils.spectral_ops import (
     extract_temporal_trend,
     multi_scale_spectral_distance,
@@ -80,6 +81,7 @@ class RobustStage1TaskMixin:
         robust_topk_groups: int = 0,
         robust_group_key: str = "dataset",
         robust_relu_cap: float = 5.0,
+        robust_logsumexp_excess: bool = False,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
@@ -94,6 +96,7 @@ class RobustStage1TaskMixin:
             raise ValueError("robust_group_key must be one of: dataset, graph, domain")
         self.robust_group_key = gk
         self.robust_relu_cap = float(robust_relu_cap)
+        self.robust_logsumexp_excess = bool(robust_logsumexp_excess)
         self._ema_mean: Dict[str, float] = {}
         self._ema_m2: Dict[str, float] = {}
 
@@ -192,18 +195,33 @@ class RobustStage1TaskMixin:
         y_stable_scaled, _, _ = self._align_pred_target(y_stable_scaled, y_scaled, loss_mask)
         y_residual_scaled, _, _ = self._align_pred_target(y_residual_scaled, y_scaled, loss_mask)
 
+        use_persistence = bool(getattr(model, "use_persistence_anchor", False))
+        y_per_scaled: Optional[torch.Tensor] = None
+        if use_persistence:
+            y_per_scaled = persistence_forecast_from_input(x_scaled, y_scaled.shape[1])
+            y_per_scaled, _, _ = self._align_pred_target(y_per_scaled, y_scaled, loss_mask)
+
         if self.stable_target == "lowfreq":
             stable_target_scaled, _ = split_low_high_frequency(
                 y_scaled,
                 low_ratio=self.stable_low_ratio,
                 num_low_bins=self.stable_num_low_bins,
             )
+            if use_persistence and y_per_scaled is not None:
+                stable_target_scaled = stable_target_scaled - y_per_scaled
         elif self.stable_target == "trend":
             stable_target_scaled = extract_temporal_trend(y_scaled, scale=self.trend_scale)
+            if use_persistence and y_per_scaled is not None:
+                stable_target_scaled = stable_target_scaled - y_per_scaled
         else:
             stable_target_scaled = y_scaled
+            if use_persistence and y_per_scaled is not None:
+                stable_target_scaled = stable_target_scaled - y_per_scaled
 
-        residual_target_scaled = y_scaled - y_stable_scaled.detach()
+        if use_persistence and y_per_scaled is not None:
+            residual_target_scaled = y_scaled - y_per_scaled - y_stable_scaled.detach()
+        else:
+            residual_target_scaled = y_scaled - y_stable_scaled.detach()
 
         pred = self.inverse_transform(y_hat_scaled, batch=batch)
         pred, target_denorm, metric_mask = self._align_pred_target(pred, raw_target, raw_mask)
@@ -223,20 +241,52 @@ class RobustStage1TaskMixin:
             y_stable_scaled, stable_target_scaled, mask=loss_mask
         )
         gids = group_keys_from_batch(batch, group_key=self.robust_group_key, device=device)
-        l_stable_effective = self._robust_effective_stable_loss(l_stable, per_item, gids)
+        group_aux: Dict[str, Tensor] = {}
 
-        unique_g: List[str] = []
-        for g in gids:
-            if g not in unique_g:
-                unique_g.append(g)
-        for g in unique_g:
-            msk = per_item.new_tensor(
-                [1.0 if gids[i] == g else 0.0 for i in range(len(gids))],
-                dtype=per_item.dtype,
-                device=per_item.device,
+        if self.robust_logsumexp_excess and use_persistence:
+            per_item_persist = stable_forecast_mae_per_batch_item(
+                torch.zeros_like(y_stable_scaled), stable_target_scaled, mask=loss_mask
             )
-            l_g = (per_item * msk).sum() / msk.sum().clamp_min(1.0)
-            self._update_ema(g, float(l_g.item()))
+            unique_g: List[str] = []
+            for g in gids:
+                if g not in unique_g:
+                    unique_g.append(g)
+            excess_terms: List[Tensor] = []
+            for g in unique_g:
+                msk = per_item.new_tensor(
+                    [1.0 if gids[i] == g else 0.0 for i in range(len(gids))],
+                    dtype=per_item.dtype,
+                    device=per_item.device,
+                )
+                n_g = msk.sum().clamp_min(1.0)
+                l_g = (per_item * msk).sum() / n_g
+                p_g = (per_item_persist * msk).sum() / n_g
+                sig = self._ema_std(g)
+                excess_g = (l_g - p_g) / (sig + 1e-6)
+                excess_terms.append(excess_g)
+                self._update_ema(g, float(l_g.item()))
+                safe_g = g.replace("/", "_")
+                group_aux[f"aux/robust/group/{safe_g}/loss"] = l_g.detach()
+                group_aux[f"aux/robust/group/{safe_g}/persistence_loss"] = p_g.detach()
+                group_aux[f"aux/robust/group/{safe_g}/excess_loss"] = excess_g.detach()
+            stack = torch.stack(excess_terms)
+            l_stable_effective = self.robust_temperature * torch.logsumexp(
+                stack / self.robust_temperature, dim=0
+            )
+        else:
+            l_stable_effective = self._robust_effective_stable_loss(l_stable, per_item, gids)
+            unique_g: List[str] = []
+            for g in gids:
+                if g not in unique_g:
+                    unique_g.append(g)
+            for g in unique_g:
+                msk = per_item.new_tensor(
+                    [1.0 if gids[i] == g else 0.0 for i in range(len(gids))],
+                    dtype=per_item.dtype,
+                    device=per_item.device,
+                )
+                l_g = (per_item * msk).sum() / msk.sum().clamp_min(1.0)
+                self._update_ema(g, float(l_g.item()))
 
         total = (
             w_final * l_final
@@ -246,6 +296,7 @@ class RobustStage1TaskMixin:
         )
 
         logs: Dict[str, Tensor] = dict(main_loss_out["logs"])
+        logs.update(group_aux)
         with torch.no_grad():
             l_base = l_stable.detach().clamp_min(1e-9)
             logs["aux/robust/stable_ratio"] = (l_stable_effective.detach() / l_base)

@@ -1,6 +1,5 @@
-# UniST budget-matched: Monash MAE -> masked mixed -> prompt+MaskedForecastCompletion on source.
-# Traffic eval uses MaskedForecastCompletionTask (history + masked future -> reconstruct suffix);
-# forecast_head is not used on the target path.
+# UniST budget-matched (legacy / high-capacity): 512/512 prompt memory; 50k+50k mixed updates; few-shot includes reconstruction_head.*.
+# Fair main-table baseline: configs/budget_matched/unist_monash15_then_mixed_12_basicts_budget_lite.yaml  (UniST-lite).
 
 experiment_name: unist_monash15_then_mixed_12_basicts_budget
 seed: 42

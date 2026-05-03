@@ -292,6 +292,20 @@ class FactoSTFoundationModel(nn.Module):
         graph: Optional[torch.Tensor] = None,
         mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
+        """Encode windows.
+
+        Cross-domain STA training batches pad ``x`` to ``max_num_channels`` (see
+        :class:`MultiDatasetWindowDataModule`), but single-dataset :class:`WindowDataModule`
+        eval often leaves ``x`` at its native width (e.g. 1). Without padding, the
+        [node × channel] token layout differs from pretraining and zero-shot quality
+        collapses — mirroring :class:`OpenCityFoundationModel.encode` channel inflate.
+        """
+        x = ensure_4d(x)
+        batch, steps, nodes, channels = x.shape
+        if channels < self.input_dim:
+            x = F.pad(x, (0, self.input_dim - channels))
+            if mask is not None:
+                mask = F.pad(mask.bool(), (0, self.input_dim - channels))
         if mask is not None:
             x = torch.where(mask.bool(), torch.zeros_like(x), x)
         patches, _, _ = self._patch(x)
@@ -355,14 +369,16 @@ class FactoSTFoundationModel(nn.Module):
             summary = encoded.mean(dim=3)
             forecast = self.forecast_head(summary)[..., : self.output_len]
             forecast = forecast.permute(0, 3, 1, 2).contiguous()
-            if self.output_dim != channels:
-                if self.output_dim == 1:
-                    forecast = forecast.mean(dim=-1, keepdim=True)
-                else:
-                    raise ValueError(
-                        "FactoSTFoundationModel currently requires output_dim=input_dim "
-                        "unless output_dim=1"
-                    )
+            # When output_dim==1 and C>1, training supervises the mean over channel towers
+            # (see multi-dataset padding). Always reduce that way when C==1 as well so
+            # ``mean(...)`` matches a single active slice inside a full-width layout.
+            if self.output_dim == 1:
+                forecast = forecast.mean(dim=-1, keepdim=True)
+            elif self.output_dim != channels:
+                raise ValueError(
+                    "FactoSTFoundationModel currently requires output_dim=input_dim "
+                    "unless output_dim=1"
+                )
             out["forecast"] = forecast
 
         if mode in {"reconstruct", "reconstruction", "both"}:

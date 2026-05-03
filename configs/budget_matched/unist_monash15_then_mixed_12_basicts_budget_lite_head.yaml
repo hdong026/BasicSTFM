@@ -1,11 +1,11 @@
-# FactoST budget-matched: UTP 50k + STA(source adapter) 50k; zero-shot loads STA artifact.
+# UniST-lite + few-shot head ablation (appendix only): same as lite but few-shot also tunes reconstruction_head.
 
-experiment_name: factost_monash15_then_mixed_12_basicts_budget
+experiment_name: unist_monash15_then_mixed_12_basicts_budget_lite_head
 seed: 42
 trainer:
   type: MultiStageTrainer
   device: auto
-  work_dir: runs/factost_monash15_then_mixed_12_basicts_budget
+  work_dir: runs/unist_monash15_then_mixed_12_basicts_budget_lite_head
   log_every: 50
 dataset_registry:
   LargeST_xd_part0:
@@ -159,37 +159,28 @@ data:
   scaler:
     type: standard
 model:
-  type: FactoSTFoundationModel
+  type: UniSTFoundationModel
   num_nodes: auto
   input_dim: auto
   output_dim: auto
   input_len: auto
   output_len: auto
   max_num_nodes: 1024
-  patch_len: 16
-  hidden_dim: 256
-  num_layers: 3
-  num_heads: 4
-  ffn_dim: 1024
-  dropout: 0.2
-  num_prompt_tokens: 3
-  use_st_adapter: true
-  use_st_metadata: true
-  use_st_filtering: true
-  use_cpr: true
-  max_delay_steps: 3
-  filter_matrices:
-  - S_s
-  - S_t
-  - S_d
-  num_prototypes: 8
+  hidden_dim: 128
+  encoder_layers: 6
+  decoder_layers: 4
+  num_heads: 8
+  ffn_dim: 256
+  dropout: 0.1
+  attention_mode: factorized
+  use_prompt: false
+  num_memory_spatial: 128
+  num_memory_temporal: 128
 pipeline:
   stages:
   - name: monash_temporal_warmup
-    save_artifact: factost_monash15_warmup
+    save_artifact: unist_monash15_warmup
     reset_data: true
-    model:
-      use_st_adapter: false
     data:
       type: MonashMultiDatasetWindowDataModule
       dataset_group: monash15_sources
@@ -209,9 +200,11 @@ pipeline:
         type: identity
       norm_mode: instance_standard
     epochs: 4
+    model:
+      use_prompt: false
     task:
-      type: FactoSTUTPTask
-      mask_ratio: 0.5
+      type: MaskedReconstructionTask
+      mask_ratio: 0.25
     losses:
     - type: mse
     metrics:
@@ -225,14 +218,12 @@ pipeline:
       T_max: 4
     validate_every: 1
     gradient_clip_val: 5.0
-  - name: mixed_domain_utp_pretrain
-    save_artifact: factost_xd_utp_trunk
-    load_from: ${env:FACTOST_MONASH15_CKPT,factost_monash15_warmup}
+  - name: mixed_domain_masked_pretrain
+    save_artifact: unist_xd_masked_trunk
+    load_from: ${env:UNIST_MONASH15_CKPT,unist_monash15_warmup}
     load_method: foundation_channel_inflate
     strict_load: false
     reset_data: true
-    model:
-      use_st_adapter: false
     data:
       type: MultiDatasetWindowDataModule
       dataset_group: cross_domain_sharded_sources
@@ -250,10 +241,10 @@ pipeline:
       - 0.2
       scaler:
         type: standard
-    epochs: 5
+    epochs: 8
     task:
-      type: FactoSTUTPTask
-      mask_ratio: 0.5
+      type: MaskedReconstructionTask
+      mask_ratio: 0.25
     losses:
     - type: mse
     metrics:
@@ -264,24 +255,22 @@ pipeline:
       weight_decay: 0.0001
     scheduler:
       type: CosineAnnealingLR
-      T_max: 5
+      T_max: 8
     validate_every: 1
     gradient_clip_val: 5.0
-  - name: mixed_domain_sta_source_adaptation
-    save_artifact: factost_xd_sta_source
-    load_from: ${env:FACTOST_UTP_CKPT,factost_xd_utp_trunk}
+    model:
+      use_prompt: false
+  - name: mixed_domain_prompt_source_adaptation
+    save_artifact: unist_xd_prompt_source
+    load_from: ${env:UNIST_MASKED_CKPT,unist_xd_masked_trunk}
     load_method: foundation_channel_inflate
     strict_load: false
     reset_data: true
-    model:
-      use_st_adapter: true
-      output_dim: 1
     data:
       type: MultiDatasetWindowDataModule
       dataset_group: cross_domain_sharded_sources
       input_len: 12
       output_len: 12
-      batch_size: 8
       num_workers: 2
       train_strategy: round_robin
       eval_strategy: per_dataset
@@ -294,37 +283,34 @@ pipeline:
       - 0.2
       scaler:
         type: standard
-    epochs: 5
+    epochs: 2
     task:
-      type: ForecastingTask
-      model_mode: forecast
-      primary_supervision_space: denormalized
-      basicts_scale_logging: true
-      use_revin: false
+      type: MaskedForecastCompletionTask
+      input_key: x
+      target_key: y
+      output_key: reconstruction
+      model_mode: reconstruct
     losses:
-    - type: mae
-      weight: 1.0
     - type: mse
-      weight: 0.05
     metrics:
     - type: mae
-    - type: rmse
     optimizer:
       type: AdamW
       lr: 0.001
       weight_decay: 0.0001
     scheduler:
       type: CosineAnnealingLR
-      T_max: 5
+      T_max: 2
     validate_every: 1
     gradient_clip_val: 5.0
+    model:
+      use_prompt: true
   - name: metr_la_zero_shot
     eval_only: true
     epochs: 0
     reset_data: true
     model:
-      use_st_adapter: true
-      output_dim: 1
+      use_prompt: true
     data:
       type: WindowDataModule
       dataset_key: METR-LA
@@ -338,23 +324,24 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: factost_xd_sta_source
-    load_method: checkpoint
-    strict_load: false
+    load_from: unist_xd_prompt_source
+    strict_load: true
     task:
-      type: ForecastingTask
-      model_mode: zero_shot
-      primary_supervision_space: denormalized
-      basicts_scale_logging: true
-      use_revin: false
+      type: MaskedForecastCompletionTask
+      input_key: x
+      target_key: y
+      output_key: reconstruction
+      model_mode: reconstruct
     losses:
     - type: mae
     metrics:
     - type: mae
     - type: rmse
-  - name: metr_la_five_percent_adapter_tune
+  - name: metr_la_five_percent_prompt_tune
     epochs: 20
     reset_data: true
+    model:
+      use_prompt: true
     data:
       type: WindowDataModule
       dataset_key: METR-LA
@@ -368,26 +355,20 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: factost_xd_sta_source
-    load_method: checkpoint
+    load_from: unist_xd_prompt_source
     strict_load: false
-    model:
-      use_st_adapter: true
-      output_dim: 1
     few_shot_ratio: 0.05
     freeze:
     - all
     unfreeze:
-    - prompt_*
-    - prompt_adapter.*
-    - metadata_gate.*
-    - st_*
-    - forecast_head.*
+    - prompt.*
+    - reconstruction_head.*
     task:
-      type: ForecastingTask
-      primary_supervision_space: denormalized
-      basicts_scale_logging: true
-      use_revin: false
+      type: MaskedForecastCompletionTask
+      input_key: x
+      target_key: y
+      output_key: reconstruction
+      model_mode: reconstruct
     losses:
     - type: mae
       weight: 1.0
@@ -398,7 +379,7 @@ pipeline:
     - type: rmse
     optimizer:
       type: AdamW
-      lr: 0.001
+      lr: 0.0003
       weight_decay: 0.0001
     scheduler:
       type: CosineAnnealingLR
@@ -407,9 +388,11 @@ pipeline:
     gradient_clip_val: 5.0
     save_best_by: val/metric/mae
     save_best: true
-  - name: metr_la_ten_percent_adapter_tune
+  - name: metr_la_ten_percent_prompt_tune
     epochs: 20
     reset_data: true
+    model:
+      use_prompt: true
     data:
       type: WindowDataModule
       dataset_key: METR-LA
@@ -423,26 +406,20 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: factost_xd_sta_source
-    load_method: checkpoint
+    load_from: unist_xd_prompt_source
     strict_load: false
-    model:
-      use_st_adapter: true
-      output_dim: 1
     few_shot_ratio: 0.1
     freeze:
     - all
     unfreeze:
-    - prompt_*
-    - prompt_adapter.*
-    - metadata_gate.*
-    - st_*
-    - forecast_head.*
+    - prompt.*
+    - reconstruction_head.*
     task:
-      type: ForecastingTask
-      primary_supervision_space: denormalized
-      basicts_scale_logging: true
-      use_revin: false
+      type: MaskedForecastCompletionTask
+      input_key: x
+      target_key: y
+      output_key: reconstruction
+      model_mode: reconstruct
     losses:
     - type: mae
       weight: 1.0
@@ -453,7 +430,7 @@ pipeline:
     - type: rmse
     optimizer:
       type: AdamW
-      lr: 0.001
+      lr: 0.0003
       weight_decay: 0.0001
     scheduler:
       type: CosineAnnealingLR
@@ -467,8 +444,7 @@ pipeline:
     epochs: 0
     reset_data: true
     model:
-      use_st_adapter: true
-      output_dim: 1
+      use_prompt: true
     data:
       type: WindowDataModule
       dataset_key: PEMS03
@@ -482,23 +458,24 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: factost_xd_sta_source
-    load_method: checkpoint
-    strict_load: false
+    load_from: unist_xd_prompt_source
+    strict_load: true
     task:
-      type: ForecastingTask
-      model_mode: zero_shot
-      primary_supervision_space: denormalized
-      basicts_scale_logging: true
-      use_revin: false
+      type: MaskedForecastCompletionTask
+      input_key: x
+      target_key: y
+      output_key: reconstruction
+      model_mode: reconstruct
     losses:
     - type: mae
     metrics:
     - type: mae
     - type: rmse
-  - name: pems03_five_percent_adapter_tune
+  - name: pems03_five_percent_prompt_tune
     epochs: 20
     reset_data: true
+    model:
+      use_prompt: true
     data:
       type: WindowDataModule
       dataset_key: PEMS03
@@ -512,26 +489,20 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: factost_xd_sta_source
-    load_method: checkpoint
+    load_from: unist_xd_prompt_source
     strict_load: false
-    model:
-      use_st_adapter: true
-      output_dim: 1
     few_shot_ratio: 0.05
     freeze:
     - all
     unfreeze:
-    - prompt_*
-    - prompt_adapter.*
-    - metadata_gate.*
-    - st_*
-    - forecast_head.*
+    - prompt.*
+    - reconstruction_head.*
     task:
-      type: ForecastingTask
-      primary_supervision_space: denormalized
-      basicts_scale_logging: true
-      use_revin: false
+      type: MaskedForecastCompletionTask
+      input_key: x
+      target_key: y
+      output_key: reconstruction
+      model_mode: reconstruct
     losses:
     - type: mae
       weight: 1.0
@@ -542,7 +513,7 @@ pipeline:
     - type: rmse
     optimizer:
       type: AdamW
-      lr: 0.001
+      lr: 0.0003
       weight_decay: 0.0001
     scheduler:
       type: CosineAnnealingLR
@@ -551,9 +522,11 @@ pipeline:
     gradient_clip_val: 5.0
     save_best_by: val/metric/mae
     save_best: true
-  - name: pems03_ten_percent_adapter_tune
+  - name: pems03_ten_percent_prompt_tune
     epochs: 20
     reset_data: true
+    model:
+      use_prompt: true
     data:
       type: WindowDataModule
       dataset_key: PEMS03
@@ -567,26 +540,20 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: factost_xd_sta_source
-    load_method: checkpoint
+    load_from: unist_xd_prompt_source
     strict_load: false
-    model:
-      use_st_adapter: true
-      output_dim: 1
     few_shot_ratio: 0.1
     freeze:
     - all
     unfreeze:
-    - prompt_*
-    - prompt_adapter.*
-    - metadata_gate.*
-    - st_*
-    - forecast_head.*
+    - prompt.*
+    - reconstruction_head.*
     task:
-      type: ForecastingTask
-      primary_supervision_space: denormalized
-      basicts_scale_logging: true
-      use_revin: false
+      type: MaskedForecastCompletionTask
+      input_key: x
+      target_key: y
+      output_key: reconstruction
+      model_mode: reconstruct
     losses:
     - type: mae
       weight: 1.0
@@ -597,7 +564,7 @@ pipeline:
     - type: rmse
     optimizer:
       type: AdamW
-      lr: 0.001
+      lr: 0.0003
       weight_decay: 0.0001
     scheduler:
       type: CosineAnnealingLR
@@ -611,8 +578,7 @@ pipeline:
     epochs: 0
     reset_data: true
     model:
-      use_st_adapter: true
-      output_dim: 1
+      use_prompt: true
     data:
       type: WindowDataModule
       dataset_key: PEMS04
@@ -626,23 +592,24 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: factost_xd_sta_source
-    load_method: checkpoint
-    strict_load: false
+    load_from: unist_xd_prompt_source
+    strict_load: true
     task:
-      type: ForecastingTask
-      model_mode: zero_shot
-      primary_supervision_space: denormalized
-      basicts_scale_logging: true
-      use_revin: false
+      type: MaskedForecastCompletionTask
+      input_key: x
+      target_key: y
+      output_key: reconstruction
+      model_mode: reconstruct
     losses:
     - type: mae
     metrics:
     - type: mae
     - type: rmse
-  - name: pems04_five_percent_adapter_tune
+  - name: pems04_five_percent_prompt_tune
     epochs: 20
     reset_data: true
+    model:
+      use_prompt: true
     data:
       type: WindowDataModule
       dataset_key: PEMS04
@@ -656,26 +623,20 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: factost_xd_sta_source
-    load_method: checkpoint
+    load_from: unist_xd_prompt_source
     strict_load: false
-    model:
-      use_st_adapter: true
-      output_dim: 1
     few_shot_ratio: 0.05
     freeze:
     - all
     unfreeze:
-    - prompt_*
-    - prompt_adapter.*
-    - metadata_gate.*
-    - st_*
-    - forecast_head.*
+    - prompt.*
+    - reconstruction_head.*
     task:
-      type: ForecastingTask
-      primary_supervision_space: denormalized
-      basicts_scale_logging: true
-      use_revin: false
+      type: MaskedForecastCompletionTask
+      input_key: x
+      target_key: y
+      output_key: reconstruction
+      model_mode: reconstruct
     losses:
     - type: mae
       weight: 1.0
@@ -686,7 +647,7 @@ pipeline:
     - type: rmse
     optimizer:
       type: AdamW
-      lr: 0.001
+      lr: 0.0003
       weight_decay: 0.0001
     scheduler:
       type: CosineAnnealingLR
@@ -695,9 +656,11 @@ pipeline:
     gradient_clip_val: 5.0
     save_best_by: val/metric/mae
     save_best: true
-  - name: pems04_ten_percent_adapter_tune
+  - name: pems04_ten_percent_prompt_tune
     epochs: 20
     reset_data: true
+    model:
+      use_prompt: true
     data:
       type: WindowDataModule
       dataset_key: PEMS04
@@ -711,26 +674,20 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: factost_xd_sta_source
-    load_method: checkpoint
+    load_from: unist_xd_prompt_source
     strict_load: false
-    model:
-      use_st_adapter: true
-      output_dim: 1
     few_shot_ratio: 0.1
     freeze:
     - all
     unfreeze:
-    - prompt_*
-    - prompt_adapter.*
-    - metadata_gate.*
-    - st_*
-    - forecast_head.*
+    - prompt.*
+    - reconstruction_head.*
     task:
-      type: ForecastingTask
-      primary_supervision_space: denormalized
-      basicts_scale_logging: true
-      use_revin: false
+      type: MaskedForecastCompletionTask
+      input_key: x
+      target_key: y
+      output_key: reconstruction
+      model_mode: reconstruct
     losses:
     - type: mae
       weight: 1.0
@@ -741,7 +698,7 @@ pipeline:
     - type: rmse
     optimizer:
       type: AdamW
-      lr: 0.001
+      lr: 0.0003
       weight_decay: 0.0001
     scheduler:
       type: CosineAnnealingLR
@@ -755,8 +712,7 @@ pipeline:
     epochs: 0
     reset_data: true
     model:
-      use_st_adapter: true
-      output_dim: 1
+      use_prompt: true
     data:
       type: WindowDataModule
       dataset_key: PEMS07
@@ -770,23 +726,24 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: factost_xd_sta_source
-    load_method: checkpoint
-    strict_load: false
+    load_from: unist_xd_prompt_source
+    strict_load: true
     task:
-      type: ForecastingTask
-      model_mode: zero_shot
-      primary_supervision_space: denormalized
-      basicts_scale_logging: true
-      use_revin: false
+      type: MaskedForecastCompletionTask
+      input_key: x
+      target_key: y
+      output_key: reconstruction
+      model_mode: reconstruct
     losses:
     - type: mae
     metrics:
     - type: mae
     - type: rmse
-  - name: pems07_five_percent_adapter_tune
+  - name: pems07_five_percent_prompt_tune
     epochs: 20
     reset_data: true
+    model:
+      use_prompt: true
     data:
       type: WindowDataModule
       dataset_key: PEMS07
@@ -800,26 +757,20 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: factost_xd_sta_source
-    load_method: checkpoint
+    load_from: unist_xd_prompt_source
     strict_load: false
-    model:
-      use_st_adapter: true
-      output_dim: 1
     few_shot_ratio: 0.05
     freeze:
     - all
     unfreeze:
-    - prompt_*
-    - prompt_adapter.*
-    - metadata_gate.*
-    - st_*
-    - forecast_head.*
+    - prompt.*
+    - reconstruction_head.*
     task:
-      type: ForecastingTask
-      primary_supervision_space: denormalized
-      basicts_scale_logging: true
-      use_revin: false
+      type: MaskedForecastCompletionTask
+      input_key: x
+      target_key: y
+      output_key: reconstruction
+      model_mode: reconstruct
     losses:
     - type: mae
       weight: 1.0
@@ -830,7 +781,7 @@ pipeline:
     - type: rmse
     optimizer:
       type: AdamW
-      lr: 0.001
+      lr: 0.0003
       weight_decay: 0.0001
     scheduler:
       type: CosineAnnealingLR
@@ -839,9 +790,11 @@ pipeline:
     gradient_clip_val: 5.0
     save_best_by: val/metric/mae
     save_best: true
-  - name: pems07_ten_percent_adapter_tune
+  - name: pems07_ten_percent_prompt_tune
     epochs: 20
     reset_data: true
+    model:
+      use_prompt: true
     data:
       type: WindowDataModule
       dataset_key: PEMS07
@@ -855,26 +808,20 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: factost_xd_sta_source
-    load_method: checkpoint
+    load_from: unist_xd_prompt_source
     strict_load: false
-    model:
-      use_st_adapter: true
-      output_dim: 1
     few_shot_ratio: 0.1
     freeze:
     - all
     unfreeze:
-    - prompt_*
-    - prompt_adapter.*
-    - metadata_gate.*
-    - st_*
-    - forecast_head.*
+    - prompt.*
+    - reconstruction_head.*
     task:
-      type: ForecastingTask
-      primary_supervision_space: denormalized
-      basicts_scale_logging: true
-      use_revin: false
+      type: MaskedForecastCompletionTask
+      input_key: x
+      target_key: y
+      output_key: reconstruction
+      model_mode: reconstruct
     losses:
     - type: mae
       weight: 1.0
@@ -885,7 +832,7 @@ pipeline:
     - type: rmse
     optimizer:
       type: AdamW
-      lr: 0.001
+      lr: 0.0003
       weight_decay: 0.0001
     scheduler:
       type: CosineAnnealingLR
@@ -899,8 +846,7 @@ pipeline:
     epochs: 0
     reset_data: true
     model:
-      use_st_adapter: true
-      output_dim: 1
+      use_prompt: true
     data:
       type: WindowDataModule
       dataset_key: PEMS08
@@ -914,23 +860,24 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: factost_xd_sta_source
-    load_method: checkpoint
-    strict_load: false
+    load_from: unist_xd_prompt_source
+    strict_load: true
     task:
-      type: ForecastingTask
-      model_mode: zero_shot
-      primary_supervision_space: denormalized
-      basicts_scale_logging: true
-      use_revin: false
+      type: MaskedForecastCompletionTask
+      input_key: x
+      target_key: y
+      output_key: reconstruction
+      model_mode: reconstruct
     losses:
     - type: mae
     metrics:
     - type: mae
     - type: rmse
-  - name: pems08_five_percent_adapter_tune
+  - name: pems08_five_percent_prompt_tune
     epochs: 20
     reset_data: true
+    model:
+      use_prompt: true
     data:
       type: WindowDataModule
       dataset_key: PEMS08
@@ -944,26 +891,20 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: factost_xd_sta_source
-    load_method: checkpoint
+    load_from: unist_xd_prompt_source
     strict_load: false
-    model:
-      use_st_adapter: true
-      output_dim: 1
     few_shot_ratio: 0.05
     freeze:
     - all
     unfreeze:
-    - prompt_*
-    - prompt_adapter.*
-    - metadata_gate.*
-    - st_*
-    - forecast_head.*
+    - prompt.*
+    - reconstruction_head.*
     task:
-      type: ForecastingTask
-      primary_supervision_space: denormalized
-      basicts_scale_logging: true
-      use_revin: false
+      type: MaskedForecastCompletionTask
+      input_key: x
+      target_key: y
+      output_key: reconstruction
+      model_mode: reconstruct
     losses:
     - type: mae
       weight: 1.0
@@ -974,7 +915,7 @@ pipeline:
     - type: rmse
     optimizer:
       type: AdamW
-      lr: 0.001
+      lr: 0.0003
       weight_decay: 0.0001
     scheduler:
       type: CosineAnnealingLR
@@ -983,9 +924,11 @@ pipeline:
     gradient_clip_val: 5.0
     save_best_by: val/metric/mae
     save_best: true
-  - name: pems08_ten_percent_adapter_tune
+  - name: pems08_ten_percent_prompt_tune
     epochs: 20
     reset_data: true
+    model:
+      use_prompt: true
     data:
       type: WindowDataModule
       dataset_key: PEMS08
@@ -999,26 +942,20 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: factost_xd_sta_source
-    load_method: checkpoint
+    load_from: unist_xd_prompt_source
     strict_load: false
-    model:
-      use_st_adapter: true
-      output_dim: 1
     few_shot_ratio: 0.1
     freeze:
     - all
     unfreeze:
-    - prompt_*
-    - prompt_adapter.*
-    - metadata_gate.*
-    - st_*
-    - forecast_head.*
+    - prompt.*
+    - reconstruction_head.*
     task:
-      type: ForecastingTask
-      primary_supervision_space: denormalized
-      basicts_scale_logging: true
-      use_revin: false
+      type: MaskedForecastCompletionTask
+      input_key: x
+      target_key: y
+      output_key: reconstruction
+      model_mode: reconstruct
     losses:
     - type: mae
       weight: 1.0
@@ -1029,7 +966,7 @@ pipeline:
     - type: rmse
     optimizer:
       type: AdamW
-      lr: 0.001
+      lr: 0.0003
       weight_decay: 0.0001
     scheduler:
       type: CosineAnnealingLR
@@ -1043,8 +980,7 @@ pipeline:
     epochs: 0
     reset_data: true
     model:
-      use_st_adapter: true
-      output_dim: 1
+      use_prompt: true
     data:
       type: WindowDataModule
       dataset_key: PEMS-BAY
@@ -1058,23 +994,24 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: factost_xd_sta_source
-    load_method: checkpoint
-    strict_load: false
+    load_from: unist_xd_prompt_source
+    strict_load: true
     task:
-      type: ForecastingTask
-      model_mode: zero_shot
-      primary_supervision_space: denormalized
-      basicts_scale_logging: true
-      use_revin: false
+      type: MaskedForecastCompletionTask
+      input_key: x
+      target_key: y
+      output_key: reconstruction
+      model_mode: reconstruct
     losses:
     - type: mae
     metrics:
     - type: mae
     - type: rmse
-  - name: pems_bay_five_percent_adapter_tune
+  - name: pems_bay_five_percent_prompt_tune
     epochs: 20
     reset_data: true
+    model:
+      use_prompt: true
     data:
       type: WindowDataModule
       dataset_key: PEMS-BAY
@@ -1088,26 +1025,20 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: factost_xd_sta_source
-    load_method: checkpoint
+    load_from: unist_xd_prompt_source
     strict_load: false
-    model:
-      use_st_adapter: true
-      output_dim: 1
     few_shot_ratio: 0.05
     freeze:
     - all
     unfreeze:
-    - prompt_*
-    - prompt_adapter.*
-    - metadata_gate.*
-    - st_*
-    - forecast_head.*
+    - prompt.*
+    - reconstruction_head.*
     task:
-      type: ForecastingTask
-      primary_supervision_space: denormalized
-      basicts_scale_logging: true
-      use_revin: false
+      type: MaskedForecastCompletionTask
+      input_key: x
+      target_key: y
+      output_key: reconstruction
+      model_mode: reconstruct
     losses:
     - type: mae
       weight: 1.0
@@ -1118,7 +1049,7 @@ pipeline:
     - type: rmse
     optimizer:
       type: AdamW
-      lr: 0.001
+      lr: 0.0003
       weight_decay: 0.0001
     scheduler:
       type: CosineAnnealingLR
@@ -1127,9 +1058,11 @@ pipeline:
     gradient_clip_val: 5.0
     save_best_by: val/metric/mae
     save_best: true
-  - name: pems_bay_ten_percent_adapter_tune
+  - name: pems_bay_ten_percent_prompt_tune
     epochs: 20
     reset_data: true
+    model:
+      use_prompt: true
     data:
       type: WindowDataModule
       dataset_key: PEMS-BAY
@@ -1143,26 +1076,20 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: factost_xd_sta_source
-    load_method: checkpoint
+    load_from: unist_xd_prompt_source
     strict_load: false
-    model:
-      use_st_adapter: true
-      output_dim: 1
     few_shot_ratio: 0.1
     freeze:
     - all
     unfreeze:
-    - prompt_*
-    - prompt_adapter.*
-    - metadata_gate.*
-    - st_*
-    - forecast_head.*
+    - prompt.*
+    - reconstruction_head.*
     task:
-      type: ForecastingTask
-      primary_supervision_space: denormalized
-      basicts_scale_logging: true
-      use_revin: false
+      type: MaskedForecastCompletionTask
+      input_key: x
+      target_key: y
+      output_key: reconstruction
+      model_mode: reconstruct
     losses:
     - type: mae
       weight: 1.0
@@ -1173,7 +1100,7 @@ pipeline:
     - type: rmse
     optimizer:
       type: AdamW
-      lr: 0.001
+      lr: 0.0003
       weight_decay: 0.0001
     scheduler:
       type: CosineAnnealingLR

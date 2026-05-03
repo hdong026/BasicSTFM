@@ -11,6 +11,7 @@ from basicstfm.losses.disentangle_losses import cross_covariance_penalty
 from basicstfm.losses.stable_losses import stable_forecast_loss
 from basicstfm.registry import TASKS
 from basicstfm.tasks.base import Task, move_to_device
+from basicstfm.utils.persistence_anchor import persistence_forecast_from_input
 from basicstfm.utils.spectral_ops import (
     extract_temporal_trend,
     multi_scale_spectral_distance,
@@ -239,6 +240,11 @@ class StableResidualForecastingTask(Task):
         if not isinstance(outputs, dict):
             raise TypeError("StableResidualForecastingTask expects model outputs to be a dict")
 
+        use_persistence = bool(getattr(model, "use_persistence_anchor", False))
+        y_per_scaled: Optional[torch.Tensor] = None
+        if use_persistence:
+            y_per_scaled = persistence_forecast_from_input(x_scaled, y_scaled.shape[1])
+
         y_hat_scaled = outputs[self.output_key]
         y_stable_scaled = outputs["stable_forecast"]
         y_residual_scaled = outputs["residual_forecast"]
@@ -251,6 +257,8 @@ class StableResidualForecastingTask(Task):
         y_hat_scaled, y_scaled, loss_mask = self._align_pred_target(y_hat_scaled, y_scaled, raw_mask)
         y_stable_scaled, _, _ = self._align_pred_target(y_stable_scaled, y_scaled, loss_mask)
         y_residual_scaled, _, _ = self._align_pred_target(y_residual_scaled, y_scaled, loss_mask)
+        if use_persistence and y_per_scaled is not None:
+            y_per_scaled, _, _ = self._align_pred_target(y_per_scaled, y_scaled, loss_mask)
 
         if self.stable_target == "lowfreq":
             stable_target_scaled, _ = split_low_high_frequency(
@@ -258,12 +266,21 @@ class StableResidualForecastingTask(Task):
                 low_ratio=self.stable_low_ratio,
                 num_low_bins=self.stable_num_low_bins,
             )
+            if use_persistence and y_per_scaled is not None:
+                stable_target_scaled = stable_target_scaled - y_per_scaled
         elif self.stable_target == "trend":
             stable_target_scaled = extract_temporal_trend(y_scaled, scale=self.trend_scale)
+            if use_persistence and y_per_scaled is not None:
+                stable_target_scaled = stable_target_scaled - y_per_scaled
         else:
             stable_target_scaled = y_scaled
+            if use_persistence and y_per_scaled is not None:
+                stable_target_scaled = stable_target_scaled - y_per_scaled
 
-        residual_target_scaled = y_scaled - y_stable_scaled.detach()
+        if use_persistence and y_per_scaled is not None:
+            residual_target_scaled = y_scaled - y_per_scaled - y_stable_scaled.detach()
+        else:
+            residual_target_scaled = y_scaled - y_stable_scaled.detach()
 
         y_hat_rawspace = (
             factost_value_revin_inverse(y_hat_scaled, batch) if self.use_revin else y_hat_scaled
@@ -312,6 +329,16 @@ class StableResidualForecastingTask(Task):
         )
 
         logs: Dict[str, torch.Tensor] = dict(main_loss_out["logs"])
+        for _pk in (
+            "propagator_alpha_spatial",
+            "propagator_alpha_temporal",
+            "propagator_alpha_event",
+            "propagator_gate_entropy",
+            "propagator_event_intensity_mean",
+        ):
+            _v = outputs.get(_pk)
+            if isinstance(_v, torch.Tensor) and _v.numel() > 0:
+                logs[f"metric/{_pk}"] = _v.detach().reshape(())
         if self.use_revin:
             rm = batch["revin_mean"]
             rs = batch["revin_std"]
@@ -364,6 +391,14 @@ class StableResidualForecastingTask(Task):
                 logs["metric/rmse_original_after_inverse_standard_scaler"] = torch.sqrt(
                     _scalar_masked_mean(sq_o, metric_mask).clamp_min(1e-12)
                 )
+                if use_persistence and y_per_scaled is not None:
+                    yper_dn = self.inverse_transform(y_per_scaled, batch=batch)
+                    yper_dn, tgt_d, pm = self._align_pred_target(yper_dn, raw_target, raw_mask)
+                    logs["metric/persistence_mae"] = _scalar_masked_mean((yper_dn - tgt_d).abs(), pm)
+                    logs["metric/stable_delta_mae"] = _scalar_masked_mean(
+                        (y_stable_scaled - stable_target_scaled).abs(), loss_mask
+                    )
+                    logs["metric/final_mae"] = _scalar_masked_mean(err_o, metric_mask)
 
         if self.log_aux_losses:
             logs.update(

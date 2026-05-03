@@ -83,7 +83,11 @@ def main(argv: Sequence[str] | None = None) -> None:
         "FactoST",
         "FactoST (XD)",
         "UniST",
+        "UniST-lite",
+        "UniST-lite+Head",
         "UniST (XD)",
+        "DPM-SR",
+        "DPM-SR++",
         "DPM-STFM",
         "DPM-SR (XD)",
         "DPM-SR v4 (XD E2E)",
@@ -214,8 +218,12 @@ _MODEL_COLORS: Dict[str, str] = {
     "FactoST (XD)": "#E69F00",
     "FactoST (XD, P0 full-eval)": "#E69F00",
     "UniST": "#009E73",
+    "UniST-lite": "#00A870",
+    "UniST-lite+Head": "#66C2A5",
     "UniST (XD)": "#009E73",
     "UniST (XD, P0 full-eval)": "#009E73",
+    "DPM-SR": "#6A3D9A",
+    "DPM-SR++": "#332288",
     "DPM-STFM": "#CC79A7",
     "DPM-v2 (XD)": "#E31A1C",
     "DPM-v2 (XD, P0 full-eval)": "#E31A1C",
@@ -286,7 +294,8 @@ def _bar_color_for_model(name: str, index: int) -> str:
 
 
 def _is_highlight_model(name: str) -> bool:
-    return str(name) == "DPM-STFM"
+    # Budget transfer uses DPM-SR / DPM-SR++; older configs still surface as DPM-STFM.
+    return str(name) in {"DPM-STFM", "DPM-SR++"}
 
 
 # Short, familiar labels for x-axis when many traffic benchmarks sit side by side

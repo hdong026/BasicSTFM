@@ -15,6 +15,7 @@ from basicstfm.models.residual_constructor import ResidualConstructor
 from basicstfm.models.residual_event_encoder import ResidualEventEncoder
 from basicstfm.models.stable_trunk_encoder import StableTrunkEncoder
 from basicstfm.utils.diffusion_debug import build_diffusion_debug_payload
+from basicstfm.utils.persistence_anchor import persistence_forecast_from_input
 from basicstfm.registry import MODELS
 
 
@@ -47,6 +48,7 @@ class SRDSTFMBackbone(nn.Module):
         use_attenuation_gate: bool = True,
         use_calibration_head: bool = True,
         detach_stable_for_residual: bool = True,
+        use_persistence_anchor: bool = False,
         pretrained_path: Optional[str] = None,
         strict_load: bool = False,
     ) -> None:
@@ -61,6 +63,7 @@ class SRDSTFMBackbone(nn.Module):
         self.fusion_mode = str(fusion_mode)
         self.diffusion_enabled = bool(diffusion_enabled)
         self.use_calibration_head = bool(use_calibration_head)
+        self.use_persistence_anchor = bool(use_persistence_anchor)
 
         self.stable_trunk = StableTrunkEncoder(
             input_dim=self.input_dim,
@@ -173,6 +176,10 @@ class SRDSTFMBackbone(nn.Module):
         x, padded_mask, original_channels = self._pad_input(x, mask)
         target = self._pad_target(target)
 
+        persistence = None
+        if self.use_persistence_anchor:
+            persistence = persistence_forecast_from_input(x, self.output_len)
+
         stable = self.stable_trunk(x, mask=padded_mask)
         stable_reconstruction = stable["stable_reconstruction"]
         stable_forecast = stable["stable_forecast"]
@@ -186,6 +193,13 @@ class SRDSTFMBackbone(nn.Module):
             stable_forecast=stable_forecast,
             target=target,
         )
+        if self.use_persistence_anchor and persistence is not None and target is not None:
+            sg = (
+                stable_forecast.detach()
+                if self.residual_constructor.detach_stable
+                else stable_forecast
+            )
+            residual_pack["residual_target"] = target - persistence - sg
         residual_input = residual_pack["residual_input"]
 
         event = self.residual_event_encoder(
@@ -227,6 +241,11 @@ class SRDSTFMBackbone(nn.Module):
                 "propagation_map": zeros_map,
                 "dataset_gamma": stable_forecast.new_zeros(stable_forecast.shape[0], self.hidden_dim),
                 "dataset_beta": stable_forecast.new_zeros(stable_forecast.shape[0], self.hidden_dim),
+                "propagator_alpha_spatial": stable_forecast.new_tensor(0.0),
+                "propagator_alpha_temporal": stable_forecast.new_tensor(0.0),
+                "propagator_alpha_event": stable_forecast.new_tensor(0.0),
+                "propagator_gate_entropy": stable_forecast.new_tensor(0.0),
+                "propagator_event_intensity_mean": stable_forecast.new_tensor(0.0),
             }
 
         fusion_mode = self.fusion_mode
@@ -240,7 +259,11 @@ class SRDSTFMBackbone(nn.Module):
             residual_forecast=residual_forecast,
             mode=fusion_mode,
         )
-        forecast = self.calibration_head(fused["forecast"])
+        combined_delta = fused["forecast"]
+        if self.use_persistence_anchor and persistence is not None:
+            forecast = persistence + self.calibration_head(combined_delta)
+        else:
+            forecast = self.calibration_head(combined_delta)
 
         if original_channels < self.output_dim:
             forecast = forecast[..., :original_channels]
@@ -248,6 +271,9 @@ class SRDSTFMBackbone(nn.Module):
             residual_forecast = residual_forecast[..., :original_channels]
             stable_reconstruction = stable_reconstruction[..., :original_channels]
             residual_input = residual_input[..., :original_channels]
+            combined_delta = combined_delta[..., :original_channels]
+            if persistence is not None:
+                persistence = persistence[..., :original_channels]
 
         outputs: dict[str, torch.Tensor] = {
             "forecast": forecast,
@@ -276,8 +302,18 @@ class SRDSTFMBackbone(nn.Module):
             "propagation_map": diffusion["propagation_map"],
             "dataset_gamma": diffusion["dataset_gamma"],
             "dataset_beta": diffusion["dataset_beta"],
+            "propagator_alpha_spatial": diffusion["propagator_alpha_spatial"],
+            "propagator_alpha_temporal": diffusion["propagator_alpha_temporal"],
+            "propagator_alpha_event": diffusion["propagator_alpha_event"],
+            "propagator_gate_entropy": diffusion["propagator_gate_entropy"],
+            "propagator_event_intensity_mean": diffusion["propagator_event_intensity_mean"],
             "fusion_weight": fused["fusion_weight"],
+            "combined_delta": combined_delta,
         }
+        if persistence is not None:
+            outputs["persistence_forecast"] = persistence
+        else:
+            outputs["persistence_forecast"] = forecast.new_zeros(forecast.shape)
 
         debug_payload = build_diffusion_debug_payload(outputs)
         for key, stats in debug_payload.items():

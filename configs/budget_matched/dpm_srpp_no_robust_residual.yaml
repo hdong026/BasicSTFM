@@ -1,11 +1,11 @@
-# FactoST budget-matched: UTP 50k + STA(source adapter) 50k; zero-shot loads STA artifact.
+# Ablation: persistence + Stage-II-only FS; Stage-I robust objective disabled (plain stable pretrain).
 
-experiment_name: factost_monash15_then_mixed_12_basicts_budget
+experiment_name: dpm_srpp_no_robust_residual
 seed: 42
 trainer:
   type: MultiStageTrainer
   device: auto
-  work_dir: runs/factost_monash15_then_mixed_12_basicts_budget
+  work_dir: runs/dpm_srpp_no_robust_residual
   log_every: 50
 dataset_registry:
   LargeST_xd_part0:
@@ -38,11 +38,6 @@ dataset_registry:
     data_path: data/METR-LA_BasicTS/data.npz
     graph_path: data/METR-LA/adj.npz
     batch_size: 8
-  PEMS03:
-    name: PEMS03
-    data_path: data/PEMS03_BasicTS/data.npz
-    graph_path: data/PEMS03/adj.npz
-    batch_size: 8
   PEMS04:
     name: PEMS04
     data_path: data/PEMS04_BasicTS/data.npz
@@ -62,6 +57,11 @@ dataset_registry:
     name: PEMS-BAY
     data_path: data/PEMS-BAY_BasicTS/data.npz
     graph_path: data/PEMS-BAY/adj.npz
+    batch_size: 8
+  PEMS03:
+    name: PEMS03
+    data_path: data/PEMS03_BasicTS/data.npz
+    graph_path: data/PEMS03/adj.npz
     batch_size: 8
   australian_electricity_demand:
     name: australian_electricity_demand
@@ -123,6 +123,18 @@ dataset_registry:
     name: us_births
     monash_root: data/Monash15/us_births
     batch_size: 4
+  weather_smoke:
+    name: weather_smoke
+    monash_root: data/Monash15_smoke/weather
+    batch_size: 4
+  australian_electricity_demand_smoke:
+    name: australian_electricity_demand_smoke
+    monash_root: data/Monash15_smoke/australian_electricity_demand
+    batch_size: 4
+  bitcoin_smoke:
+    name: bitcoin_smoke
+    monash_root: data/Monash15_smoke/bitcoin
+    batch_size: 4
 dataset_groups:
   cross_domain_sharded_sources:
   - LargeST_xd_part0
@@ -159,37 +171,26 @@ data:
   scaler:
     type: standard
 model:
-  type: FactoSTFoundationModel
+  type: SRDSTFMBackbone
   num_nodes: auto
   input_dim: auto
   output_dim: auto
   input_len: auto
   output_len: auto
-  max_num_nodes: 1024
-  patch_len: 16
-  hidden_dim: 256
-  num_layers: 3
-  num_heads: 4
-  ffn_dim: 1024
-  dropout: 0.2
-  num_prompt_tokens: 3
-  use_st_adapter: true
-  use_st_metadata: true
-  use_st_filtering: true
-  use_cpr: true
-  max_delay_steps: 3
-  filter_matrices:
-  - S_s
-  - S_t
-  - S_d
-  num_prototypes: 8
+  hidden_dim: 128
+  residual_mode: forecast
+  fusion_mode: additive
+  use_frequency_branch: true
+  num_datasets: 5
+  diffusion_enabled: true
+  use_inertia_gate: true
+  use_attenuation_gate: true
+  use_persistence_anchor: true
 pipeline:
   stages:
   - name: monash_temporal_warmup
-    save_artifact: factost_monash15_warmup
+    save_artifact: dpm_budget_monash_warmup
     reset_data: true
-    model:
-      use_st_adapter: false
     data:
       type: MonashMultiDatasetWindowDataModule
       dataset_group: monash15_sources
@@ -209,13 +210,35 @@ pipeline:
         type: identity
       norm_mode: instance_standard
     epochs: 4
+    freeze:
+    - all
+    unfreeze:
+    - stable_trunk.*
     task:
-      type: FactoSTUTPTask
-      mask_ratio: 0.5
+      type: StableResidualForecastingTaskV5
+      phase: stable
+      model_mode: stable_pretrain
+      primary_supervision_space: normalized
+      stable_target: lowfreq
+      final_weight: 1.0
+      stable_weight: 0.2
+      residual_weight: 0.2
+      spectral_weight: 0.02
+      spectral_scales:
+      - 1
+      use_revin: false
     losses:
+    - type: mae
+      weight: 1.0
+      name: norm_mae
     - type: mse
+      weight: 0.05
+      name: norm_mse
     metrics:
     - type: mae
+      name: norm_mae
+    - type: rmse
+      name: norm_rmse
     optimizer:
       type: AdamW
       lr: 0.001
@@ -225,14 +248,12 @@ pipeline:
       T_max: 4
     validate_every: 1
     gradient_clip_val: 5.0
-  - name: mixed_domain_utp_pretrain
-    save_artifact: factost_xd_utp_trunk
-    load_from: ${env:FACTOST_MONASH15_CKPT,factost_monash15_warmup}
-    load_method: foundation_channel_inflate
+  - name: cross_domain_stable_trunk_pretraining
+    load_from: ${env:MONASH_STAGE0_CKPT,dpm_budget_monash_warmup}
+    load_method: stable_trunk_channel_inflate
     strict_load: false
+    save_artifact: srd_xd_stable
     reset_data: true
-    model:
-      use_st_adapter: false
     data:
       type: MultiDatasetWindowDataModule
       dataset_group: cross_domain_sharded_sources
@@ -250,57 +271,25 @@ pipeline:
       - 0.2
       scaler:
         type: standard
-    epochs: 5
+    epochs: 4
+    freeze:
+    - all
+    unfreeze:
+    - stable_trunk.*
     task:
-      type: FactoSTUTPTask
-      mask_ratio: 0.5
-    losses:
-    - type: mse
-    metrics:
-    - type: mae
-    optimizer:
-      type: AdamW
-      lr: 0.001
-      weight_decay: 0.0001
-    scheduler:
-      type: CosineAnnealingLR
-      T_max: 5
-    validate_every: 1
-    gradient_clip_val: 5.0
-  - name: mixed_domain_sta_source_adaptation
-    save_artifact: factost_xd_sta_source
-    load_from: ${env:FACTOST_UTP_CKPT,factost_xd_utp_trunk}
-    load_method: foundation_channel_inflate
-    strict_load: false
-    reset_data: true
-    model:
-      use_st_adapter: true
-      output_dim: 1
-    data:
-      type: MultiDatasetWindowDataModule
-      dataset_group: cross_domain_sharded_sources
-      input_len: 12
-      output_len: 12
-      batch_size: 8
-      num_workers: 2
-      train_strategy: round_robin
-      eval_strategy: per_dataset
-      steps_per_epoch: 10000
-      max_val_windows: 256
-      max_test_windows: 512
-      split:
-      - 0.7
-      - 0.1
-      - 0.2
-      scaler:
-        type: standard
-    epochs: 5
-    task:
-      type: ForecastingTask
-      model_mode: forecast
-      primary_supervision_space: denormalized
-      basicts_scale_logging: true
+      type: StableResidualForecastingTaskV5
+      phase: stable
+      model_mode: stable_pretrain
+      stable_target: lowfreq
+      final_weight: 1.0
+      stable_weight: 0.2
+      residual_weight: 0.2
+      spectral_weight: 0.02
+      spectral_scales:
+      - 1
       use_revin: false
+      robust_logsumexp_excess: false
+      robust_stage1: false
     losses:
     - type: mae
       weight: 1.0
@@ -315,16 +304,122 @@ pipeline:
       weight_decay: 0.0001
     scheduler:
       type: CosineAnnealingLR
-      T_max: 5
+      T_max: 4
+    validate_every: 1
+    gradient_clip_val: 5.0
+  - name: cross_domain_residual_diffusion_pretraining
+    save_artifact: srd_xd_diffusion
+    load_from: srd_xd_stable
+    strict_load: true
+    reset_data: true
+    data:
+      type: MultiDatasetWindowDataModule
+      dataset_group: cross_domain_sharded_sources
+      input_len: 12
+      output_len: 12
+      num_workers: 2
+      train_strategy: round_robin
+      eval_strategy: per_dataset
+      steps_per_epoch: 10000
+      max_val_windows: 256
+      max_test_windows: 512
+      split:
+      - 0.7
+      - 0.1
+      - 0.2
+      scaler:
+        type: standard
+    epochs: 4
+    freeze:
+    - all
+    unfreeze:
+    - residual_event_encoder.*
+    - diffusion_mechanism_learner.*
+    task:
+      type: StableResidualForecastingTaskV5
+      phase: diffusion
+      model_mode: diffusion_pretrain
+      stable_target: lowfreq
+      final_weight: 1.0
+      stable_weight: 0.2
+      residual_weight: 0.2
+      spectral_weight: 0.02
+      spectral_scales:
+      - 1
+      use_revin: false
+    losses:
+    - type: mae
+      weight: 1.0
+    - type: mse
+      weight: 0.05
+    metrics:
+    - type: mae
+    - type: rmse
+    optimizer:
+      type: AdamW
+      lr: 0.0008
+      weight_decay: 0.0001
+    scheduler:
+      type: CosineAnnealingLR
+      T_max: 4
+    validate_every: 1
+    gradient_clip_val: 5.0
+  - name: cross_domain_joint_refinement
+    save_artifact: srd_xd_joint
+    load_from: srd_xd_diffusion
+    strict_load: true
+    reset_data: true
+    data:
+      type: MultiDatasetWindowDataModule
+      dataset_group: cross_domain_sharded_sources
+      input_len: 12
+      output_len: 12
+      num_workers: 2
+      train_strategy: round_robin
+      eval_strategy: per_dataset
+      steps_per_epoch: 10000
+      max_val_windows: 256
+      max_test_windows: 512
+      split:
+      - 0.7
+      - 0.1
+      - 0.2
+      scaler:
+        type: standard
+    epochs: 2
+    task:
+      type: StableResidualForecastingTaskV5
+      phase: joint
+      model_mode: forecast
+      stable_target: lowfreq
+      final_weight: 1.0
+      stable_weight: 0.2
+      residual_weight: 0.2
+      spectral_weight: 0.02
+      spectral_scales:
+      - 1
+      use_revin: false
+    losses:
+    - type: mae
+      weight: 1.0
+    - type: mse
+      weight: 0.05
+    metrics:
+    - type: mae
+    - type: rmse
+    optimizer:
+      type: AdamW
+      lr: 0.0005
+      weight_decay: 0.0001
+    scheduler:
+      type: CosineAnnealingLR
+      T_max: 2
     validate_every: 1
     gradient_clip_val: 5.0
   - name: metr_la_zero_shot
     eval_only: true
     epochs: 0
     reset_data: true
-    model:
-      use_st_adapter: true
-      output_dim: 1
     data:
       type: WindowDataModule
       dataset_key: METR-LA
@@ -338,21 +433,21 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: factost_xd_sta_source
-    load_method: checkpoint
-    strict_load: false
+    load_from: srd_xd_joint
+    strict_load: true
     task:
-      type: ForecastingTask
-      model_mode: zero_shot
+      type: StableResidualForecastingTaskV5
+      phase: joint
+      model_mode: forecast
+      use_revin: false
       primary_supervision_space: denormalized
       basicts_scale_logging: true
-      use_revin: false
     losses:
     - type: mae
     metrics:
     - type: mae
     - type: rmse
-  - name: metr_la_five_percent_adapter_tune
+  - name: metr_la_five_percent_mechanism_tuning
     epochs: 20
     reset_data: true
     data:
@@ -368,26 +463,29 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: factost_xd_sta_source
-    load_method: checkpoint
-    strict_load: false
-    model:
-      use_st_adapter: true
-      output_dim: 1
+    load_from: srd_xd_joint
+    strict_load: true
     few_shot_ratio: 0.05
     freeze:
     - all
     unfreeze:
-    - prompt_*
-    - prompt_adapter.*
-    - metadata_gate.*
-    - st_*
-    - forecast_head.*
+    - residual_event_encoder.*
+    - diffusion_mechanism_learner.*
+    - fusion_predictor.*
+    - calibration_head.*
     task:
-      type: ForecastingTask
+      type: StableResidualForecastingTaskV5
+      phase: joint
+      model_mode: forecast
+      stable_target: lowfreq
+      final_weight: 1.0
+      stable_weight: 0.0
+      residual_weight: 0.1
+      spectral_weight: 0.0
+      cross_cov_weight: 0.0
+      use_revin: false
       primary_supervision_space: denormalized
       basicts_scale_logging: true
-      use_revin: false
     losses:
     - type: mae
       weight: 1.0
@@ -398,7 +496,7 @@ pipeline:
     - type: rmse
     optimizer:
       type: AdamW
-      lr: 0.001
+      lr: 0.0003
       weight_decay: 0.0001
     scheduler:
       type: CosineAnnealingLR
@@ -407,7 +505,7 @@ pipeline:
     gradient_clip_val: 5.0
     save_best_by: val/metric/mae
     save_best: true
-  - name: metr_la_ten_percent_adapter_tune
+  - name: metr_la_ten_percent_mechanism_tuning
     epochs: 20
     reset_data: true
     data:
@@ -423,26 +521,29 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: factost_xd_sta_source
-    load_method: checkpoint
-    strict_load: false
-    model:
-      use_st_adapter: true
-      output_dim: 1
+    load_from: srd_xd_joint
+    strict_load: true
     few_shot_ratio: 0.1
     freeze:
     - all
     unfreeze:
-    - prompt_*
-    - prompt_adapter.*
-    - metadata_gate.*
-    - st_*
-    - forecast_head.*
+    - residual_event_encoder.*
+    - diffusion_mechanism_learner.*
+    - fusion_predictor.*
+    - calibration_head.*
     task:
-      type: ForecastingTask
+      type: StableResidualForecastingTaskV5
+      phase: joint
+      model_mode: forecast
+      stable_target: lowfreq
+      final_weight: 1.0
+      stable_weight: 0.0
+      residual_weight: 0.1
+      spectral_weight: 0.0
+      cross_cov_weight: 0.0
+      use_revin: false
       primary_supervision_space: denormalized
       basicts_scale_logging: true
-      use_revin: false
     losses:
     - type: mae
       weight: 1.0
@@ -453,7 +554,7 @@ pipeline:
     - type: rmse
     optimizer:
       type: AdamW
-      lr: 0.001
+      lr: 0.0003
       weight_decay: 0.0001
     scheduler:
       type: CosineAnnealingLR
@@ -466,9 +567,6 @@ pipeline:
     eval_only: true
     epochs: 0
     reset_data: true
-    model:
-      use_st_adapter: true
-      output_dim: 1
     data:
       type: WindowDataModule
       dataset_key: PEMS03
@@ -482,21 +580,21 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: factost_xd_sta_source
-    load_method: checkpoint
-    strict_load: false
+    load_from: srd_xd_joint
+    strict_load: true
     task:
-      type: ForecastingTask
-      model_mode: zero_shot
+      type: StableResidualForecastingTaskV5
+      phase: joint
+      model_mode: forecast
+      use_revin: false
       primary_supervision_space: denormalized
       basicts_scale_logging: true
-      use_revin: false
     losses:
     - type: mae
     metrics:
     - type: mae
     - type: rmse
-  - name: pems03_five_percent_adapter_tune
+  - name: pems03_five_percent_mechanism_tuning
     epochs: 20
     reset_data: true
     data:
@@ -512,26 +610,29 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: factost_xd_sta_source
-    load_method: checkpoint
-    strict_load: false
-    model:
-      use_st_adapter: true
-      output_dim: 1
+    load_from: srd_xd_joint
+    strict_load: true
     few_shot_ratio: 0.05
     freeze:
     - all
     unfreeze:
-    - prompt_*
-    - prompt_adapter.*
-    - metadata_gate.*
-    - st_*
-    - forecast_head.*
+    - residual_event_encoder.*
+    - diffusion_mechanism_learner.*
+    - fusion_predictor.*
+    - calibration_head.*
     task:
-      type: ForecastingTask
+      type: StableResidualForecastingTaskV5
+      phase: joint
+      model_mode: forecast
+      stable_target: lowfreq
+      final_weight: 1.0
+      stable_weight: 0.0
+      residual_weight: 0.1
+      spectral_weight: 0.0
+      cross_cov_weight: 0.0
+      use_revin: false
       primary_supervision_space: denormalized
       basicts_scale_logging: true
-      use_revin: false
     losses:
     - type: mae
       weight: 1.0
@@ -542,7 +643,7 @@ pipeline:
     - type: rmse
     optimizer:
       type: AdamW
-      lr: 0.001
+      lr: 0.0003
       weight_decay: 0.0001
     scheduler:
       type: CosineAnnealingLR
@@ -551,7 +652,7 @@ pipeline:
     gradient_clip_val: 5.0
     save_best_by: val/metric/mae
     save_best: true
-  - name: pems03_ten_percent_adapter_tune
+  - name: pems03_ten_percent_mechanism_tuning
     epochs: 20
     reset_data: true
     data:
@@ -567,26 +668,29 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: factost_xd_sta_source
-    load_method: checkpoint
-    strict_load: false
-    model:
-      use_st_adapter: true
-      output_dim: 1
+    load_from: srd_xd_joint
+    strict_load: true
     few_shot_ratio: 0.1
     freeze:
     - all
     unfreeze:
-    - prompt_*
-    - prompt_adapter.*
-    - metadata_gate.*
-    - st_*
-    - forecast_head.*
+    - residual_event_encoder.*
+    - diffusion_mechanism_learner.*
+    - fusion_predictor.*
+    - calibration_head.*
     task:
-      type: ForecastingTask
+      type: StableResidualForecastingTaskV5
+      phase: joint
+      model_mode: forecast
+      stable_target: lowfreq
+      final_weight: 1.0
+      stable_weight: 0.0
+      residual_weight: 0.1
+      spectral_weight: 0.0
+      cross_cov_weight: 0.0
+      use_revin: false
       primary_supervision_space: denormalized
       basicts_scale_logging: true
-      use_revin: false
     losses:
     - type: mae
       weight: 1.0
@@ -597,7 +701,7 @@ pipeline:
     - type: rmse
     optimizer:
       type: AdamW
-      lr: 0.001
+      lr: 0.0003
       weight_decay: 0.0001
     scheduler:
       type: CosineAnnealingLR
@@ -610,9 +714,6 @@ pipeline:
     eval_only: true
     epochs: 0
     reset_data: true
-    model:
-      use_st_adapter: true
-      output_dim: 1
     data:
       type: WindowDataModule
       dataset_key: PEMS04
@@ -626,21 +727,21 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: factost_xd_sta_source
-    load_method: checkpoint
-    strict_load: false
+    load_from: srd_xd_joint
+    strict_load: true
     task:
-      type: ForecastingTask
-      model_mode: zero_shot
+      type: StableResidualForecastingTaskV5
+      phase: joint
+      model_mode: forecast
+      use_revin: false
       primary_supervision_space: denormalized
       basicts_scale_logging: true
-      use_revin: false
     losses:
     - type: mae
     metrics:
     - type: mae
     - type: rmse
-  - name: pems04_five_percent_adapter_tune
+  - name: pems04_five_percent_mechanism_tuning
     epochs: 20
     reset_data: true
     data:
@@ -656,26 +757,29 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: factost_xd_sta_source
-    load_method: checkpoint
-    strict_load: false
-    model:
-      use_st_adapter: true
-      output_dim: 1
+    load_from: srd_xd_joint
+    strict_load: true
     few_shot_ratio: 0.05
     freeze:
     - all
     unfreeze:
-    - prompt_*
-    - prompt_adapter.*
-    - metadata_gate.*
-    - st_*
-    - forecast_head.*
+    - residual_event_encoder.*
+    - diffusion_mechanism_learner.*
+    - fusion_predictor.*
+    - calibration_head.*
     task:
-      type: ForecastingTask
+      type: StableResidualForecastingTaskV5
+      phase: joint
+      model_mode: forecast
+      stable_target: lowfreq
+      final_weight: 1.0
+      stable_weight: 0.0
+      residual_weight: 0.1
+      spectral_weight: 0.0
+      cross_cov_weight: 0.0
+      use_revin: false
       primary_supervision_space: denormalized
       basicts_scale_logging: true
-      use_revin: false
     losses:
     - type: mae
       weight: 1.0
@@ -686,7 +790,7 @@ pipeline:
     - type: rmse
     optimizer:
       type: AdamW
-      lr: 0.001
+      lr: 0.0003
       weight_decay: 0.0001
     scheduler:
       type: CosineAnnealingLR
@@ -695,7 +799,7 @@ pipeline:
     gradient_clip_val: 5.0
     save_best_by: val/metric/mae
     save_best: true
-  - name: pems04_ten_percent_adapter_tune
+  - name: pems04_ten_percent_mechanism_tuning
     epochs: 20
     reset_data: true
     data:
@@ -711,26 +815,29 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: factost_xd_sta_source
-    load_method: checkpoint
-    strict_load: false
-    model:
-      use_st_adapter: true
-      output_dim: 1
+    load_from: srd_xd_joint
+    strict_load: true
     few_shot_ratio: 0.1
     freeze:
     - all
     unfreeze:
-    - prompt_*
-    - prompt_adapter.*
-    - metadata_gate.*
-    - st_*
-    - forecast_head.*
+    - residual_event_encoder.*
+    - diffusion_mechanism_learner.*
+    - fusion_predictor.*
+    - calibration_head.*
     task:
-      type: ForecastingTask
+      type: StableResidualForecastingTaskV5
+      phase: joint
+      model_mode: forecast
+      stable_target: lowfreq
+      final_weight: 1.0
+      stable_weight: 0.0
+      residual_weight: 0.1
+      spectral_weight: 0.0
+      cross_cov_weight: 0.0
+      use_revin: false
       primary_supervision_space: denormalized
       basicts_scale_logging: true
-      use_revin: false
     losses:
     - type: mae
       weight: 1.0
@@ -741,7 +848,7 @@ pipeline:
     - type: rmse
     optimizer:
       type: AdamW
-      lr: 0.001
+      lr: 0.0003
       weight_decay: 0.0001
     scheduler:
       type: CosineAnnealingLR
@@ -754,9 +861,6 @@ pipeline:
     eval_only: true
     epochs: 0
     reset_data: true
-    model:
-      use_st_adapter: true
-      output_dim: 1
     data:
       type: WindowDataModule
       dataset_key: PEMS07
@@ -770,21 +874,21 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: factost_xd_sta_source
-    load_method: checkpoint
-    strict_load: false
+    load_from: srd_xd_joint
+    strict_load: true
     task:
-      type: ForecastingTask
-      model_mode: zero_shot
+      type: StableResidualForecastingTaskV5
+      phase: joint
+      model_mode: forecast
+      use_revin: false
       primary_supervision_space: denormalized
       basicts_scale_logging: true
-      use_revin: false
     losses:
     - type: mae
     metrics:
     - type: mae
     - type: rmse
-  - name: pems07_five_percent_adapter_tune
+  - name: pems07_five_percent_mechanism_tuning
     epochs: 20
     reset_data: true
     data:
@@ -800,26 +904,29 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: factost_xd_sta_source
-    load_method: checkpoint
-    strict_load: false
-    model:
-      use_st_adapter: true
-      output_dim: 1
+    load_from: srd_xd_joint
+    strict_load: true
     few_shot_ratio: 0.05
     freeze:
     - all
     unfreeze:
-    - prompt_*
-    - prompt_adapter.*
-    - metadata_gate.*
-    - st_*
-    - forecast_head.*
+    - residual_event_encoder.*
+    - diffusion_mechanism_learner.*
+    - fusion_predictor.*
+    - calibration_head.*
     task:
-      type: ForecastingTask
+      type: StableResidualForecastingTaskV5
+      phase: joint
+      model_mode: forecast
+      stable_target: lowfreq
+      final_weight: 1.0
+      stable_weight: 0.0
+      residual_weight: 0.1
+      spectral_weight: 0.0
+      cross_cov_weight: 0.0
+      use_revin: false
       primary_supervision_space: denormalized
       basicts_scale_logging: true
-      use_revin: false
     losses:
     - type: mae
       weight: 1.0
@@ -830,7 +937,7 @@ pipeline:
     - type: rmse
     optimizer:
       type: AdamW
-      lr: 0.001
+      lr: 0.0003
       weight_decay: 0.0001
     scheduler:
       type: CosineAnnealingLR
@@ -839,7 +946,7 @@ pipeline:
     gradient_clip_val: 5.0
     save_best_by: val/metric/mae
     save_best: true
-  - name: pems07_ten_percent_adapter_tune
+  - name: pems07_ten_percent_mechanism_tuning
     epochs: 20
     reset_data: true
     data:
@@ -855,26 +962,29 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: factost_xd_sta_source
-    load_method: checkpoint
-    strict_load: false
-    model:
-      use_st_adapter: true
-      output_dim: 1
+    load_from: srd_xd_joint
+    strict_load: true
     few_shot_ratio: 0.1
     freeze:
     - all
     unfreeze:
-    - prompt_*
-    - prompt_adapter.*
-    - metadata_gate.*
-    - st_*
-    - forecast_head.*
+    - residual_event_encoder.*
+    - diffusion_mechanism_learner.*
+    - fusion_predictor.*
+    - calibration_head.*
     task:
-      type: ForecastingTask
+      type: StableResidualForecastingTaskV5
+      phase: joint
+      model_mode: forecast
+      stable_target: lowfreq
+      final_weight: 1.0
+      stable_weight: 0.0
+      residual_weight: 0.1
+      spectral_weight: 0.0
+      cross_cov_weight: 0.0
+      use_revin: false
       primary_supervision_space: denormalized
       basicts_scale_logging: true
-      use_revin: false
     losses:
     - type: mae
       weight: 1.0
@@ -885,7 +995,7 @@ pipeline:
     - type: rmse
     optimizer:
       type: AdamW
-      lr: 0.001
+      lr: 0.0003
       weight_decay: 0.0001
     scheduler:
       type: CosineAnnealingLR
@@ -898,9 +1008,6 @@ pipeline:
     eval_only: true
     epochs: 0
     reset_data: true
-    model:
-      use_st_adapter: true
-      output_dim: 1
     data:
       type: WindowDataModule
       dataset_key: PEMS08
@@ -914,21 +1021,21 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: factost_xd_sta_source
-    load_method: checkpoint
-    strict_load: false
+    load_from: srd_xd_joint
+    strict_load: true
     task:
-      type: ForecastingTask
-      model_mode: zero_shot
+      type: StableResidualForecastingTaskV5
+      phase: joint
+      model_mode: forecast
+      use_revin: false
       primary_supervision_space: denormalized
       basicts_scale_logging: true
-      use_revin: false
     losses:
     - type: mae
     metrics:
     - type: mae
     - type: rmse
-  - name: pems08_five_percent_adapter_tune
+  - name: pems08_five_percent_mechanism_tuning
     epochs: 20
     reset_data: true
     data:
@@ -944,26 +1051,29 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: factost_xd_sta_source
-    load_method: checkpoint
-    strict_load: false
-    model:
-      use_st_adapter: true
-      output_dim: 1
+    load_from: srd_xd_joint
+    strict_load: true
     few_shot_ratio: 0.05
     freeze:
     - all
     unfreeze:
-    - prompt_*
-    - prompt_adapter.*
-    - metadata_gate.*
-    - st_*
-    - forecast_head.*
+    - residual_event_encoder.*
+    - diffusion_mechanism_learner.*
+    - fusion_predictor.*
+    - calibration_head.*
     task:
-      type: ForecastingTask
+      type: StableResidualForecastingTaskV5
+      phase: joint
+      model_mode: forecast
+      stable_target: lowfreq
+      final_weight: 1.0
+      stable_weight: 0.0
+      residual_weight: 0.1
+      spectral_weight: 0.0
+      cross_cov_weight: 0.0
+      use_revin: false
       primary_supervision_space: denormalized
       basicts_scale_logging: true
-      use_revin: false
     losses:
     - type: mae
       weight: 1.0
@@ -974,7 +1084,7 @@ pipeline:
     - type: rmse
     optimizer:
       type: AdamW
-      lr: 0.001
+      lr: 0.0003
       weight_decay: 0.0001
     scheduler:
       type: CosineAnnealingLR
@@ -983,7 +1093,7 @@ pipeline:
     gradient_clip_val: 5.0
     save_best_by: val/metric/mae
     save_best: true
-  - name: pems08_ten_percent_adapter_tune
+  - name: pems08_ten_percent_mechanism_tuning
     epochs: 20
     reset_data: true
     data:
@@ -999,26 +1109,29 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: factost_xd_sta_source
-    load_method: checkpoint
-    strict_load: false
-    model:
-      use_st_adapter: true
-      output_dim: 1
+    load_from: srd_xd_joint
+    strict_load: true
     few_shot_ratio: 0.1
     freeze:
     - all
     unfreeze:
-    - prompt_*
-    - prompt_adapter.*
-    - metadata_gate.*
-    - st_*
-    - forecast_head.*
+    - residual_event_encoder.*
+    - diffusion_mechanism_learner.*
+    - fusion_predictor.*
+    - calibration_head.*
     task:
-      type: ForecastingTask
+      type: StableResidualForecastingTaskV5
+      phase: joint
+      model_mode: forecast
+      stable_target: lowfreq
+      final_weight: 1.0
+      stable_weight: 0.0
+      residual_weight: 0.1
+      spectral_weight: 0.0
+      cross_cov_weight: 0.0
+      use_revin: false
       primary_supervision_space: denormalized
       basicts_scale_logging: true
-      use_revin: false
     losses:
     - type: mae
       weight: 1.0
@@ -1029,7 +1142,7 @@ pipeline:
     - type: rmse
     optimizer:
       type: AdamW
-      lr: 0.001
+      lr: 0.0003
       weight_decay: 0.0001
     scheduler:
       type: CosineAnnealingLR
@@ -1042,9 +1155,6 @@ pipeline:
     eval_only: true
     epochs: 0
     reset_data: true
-    model:
-      use_st_adapter: true
-      output_dim: 1
     data:
       type: WindowDataModule
       dataset_key: PEMS-BAY
@@ -1058,21 +1168,21 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: factost_xd_sta_source
-    load_method: checkpoint
-    strict_load: false
+    load_from: srd_xd_joint
+    strict_load: true
     task:
-      type: ForecastingTask
-      model_mode: zero_shot
+      type: StableResidualForecastingTaskV5
+      phase: joint
+      model_mode: forecast
+      use_revin: false
       primary_supervision_space: denormalized
       basicts_scale_logging: true
-      use_revin: false
     losses:
     - type: mae
     metrics:
     - type: mae
     - type: rmse
-  - name: pems_bay_five_percent_adapter_tune
+  - name: pems_bay_five_percent_mechanism_tuning
     epochs: 20
     reset_data: true
     data:
@@ -1088,26 +1198,29 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: factost_xd_sta_source
-    load_method: checkpoint
-    strict_load: false
-    model:
-      use_st_adapter: true
-      output_dim: 1
+    load_from: srd_xd_joint
+    strict_load: true
     few_shot_ratio: 0.05
     freeze:
     - all
     unfreeze:
-    - prompt_*
-    - prompt_adapter.*
-    - metadata_gate.*
-    - st_*
-    - forecast_head.*
+    - residual_event_encoder.*
+    - diffusion_mechanism_learner.*
+    - fusion_predictor.*
+    - calibration_head.*
     task:
-      type: ForecastingTask
+      type: StableResidualForecastingTaskV5
+      phase: joint
+      model_mode: forecast
+      stable_target: lowfreq
+      final_weight: 1.0
+      stable_weight: 0.0
+      residual_weight: 0.1
+      spectral_weight: 0.0
+      cross_cov_weight: 0.0
+      use_revin: false
       primary_supervision_space: denormalized
       basicts_scale_logging: true
-      use_revin: false
     losses:
     - type: mae
       weight: 1.0
@@ -1118,7 +1231,7 @@ pipeline:
     - type: rmse
     optimizer:
       type: AdamW
-      lr: 0.001
+      lr: 0.0003
       weight_decay: 0.0001
     scheduler:
       type: CosineAnnealingLR
@@ -1127,7 +1240,7 @@ pipeline:
     gradient_clip_val: 5.0
     save_best_by: val/metric/mae
     save_best: true
-  - name: pems_bay_ten_percent_adapter_tune
+  - name: pems_bay_ten_percent_mechanism_tuning
     epochs: 20
     reset_data: true
     data:
@@ -1143,26 +1256,29 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: factost_xd_sta_source
-    load_method: checkpoint
-    strict_load: false
-    model:
-      use_st_adapter: true
-      output_dim: 1
+    load_from: srd_xd_joint
+    strict_load: true
     few_shot_ratio: 0.1
     freeze:
     - all
     unfreeze:
-    - prompt_*
-    - prompt_adapter.*
-    - metadata_gate.*
-    - st_*
-    - forecast_head.*
+    - residual_event_encoder.*
+    - diffusion_mechanism_learner.*
+    - fusion_predictor.*
+    - calibration_head.*
     task:
-      type: ForecastingTask
+      type: StableResidualForecastingTaskV5
+      phase: joint
+      model_mode: forecast
+      stable_target: lowfreq
+      final_weight: 1.0
+      stable_weight: 0.0
+      residual_weight: 0.1
+      spectral_weight: 0.0
+      cross_cov_weight: 0.0
+      use_revin: false
       primary_supervision_space: denormalized
       basicts_scale_logging: true
-      use_revin: false
     losses:
     - type: mae
       weight: 1.0
@@ -1173,7 +1289,7 @@ pipeline:
     - type: rmse
     optimizer:
       type: AdamW
-      lr: 0.001
+      lr: 0.0003
       weight_decay: 0.0001
     scheduler:
       type: CosineAnnealingLR

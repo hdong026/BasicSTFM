@@ -195,14 +195,34 @@ class DiffusionMechanismLearner(nn.Module):
             propagation_steps.append(propagation_strength)
 
         residual_forecast = torch.stack(forecasts, dim=1)
+
+        activation_stack = torch.stack(activation_steps, dim=1)
+        diffusion_stack = torch.stack(diffusion_steps, dim=1)
+        inertia_stack = torch.stack(inertia_steps, dim=1)
+        spill_stack = torch.stack(spillover_steps, dim=1)
+        graph_strength = static_graph.mean()
+        alpha_spatial = (diffusion_stack * graph_strength).mean()
+        alpha_temporal = inertia_stack.mean()
+        ev_score_agg = event_score.mean(dim=1, keepdim=True)
+        alpha_event = (activation_stack * ev_score_agg).mean()
+        trio = torch.stack([alpha_spatial, alpha_temporal, alpha_event])
+        trio_norm = torch.softmax(trio, dim=0)
+        gate_entropy = -(trio_norm * (trio_norm + 1e-9).log()).sum()
+        propagator_event_intensity_mean = event_score.mean()
+
         return {
             "residual_forecast": residual_forecast,
-            "event_activation": torch.stack(activation_steps, dim=1),
-            "diffusion_gate": torch.stack(diffusion_steps, dim=1),
-            "inertia_gate": torch.stack(inertia_steps, dim=1),
+            "event_activation": activation_stack,
+            "diffusion_gate": diffusion_stack,
+            "inertia_gate": inertia_stack,
             "attenuation_gate": torch.stack(attenuation_steps, dim=1),
-            "spillover_gate": torch.stack(spillover_steps, dim=1),
+            "spillover_gate": spill_stack,
             "propagation_map": torch.stack(propagation_steps, dim=1),
             "dataset_gamma": modulation["gamma"],
             "dataset_beta": modulation["beta"],
+            "propagator_alpha_spatial": alpha_spatial.detach(),
+            "propagator_alpha_temporal": alpha_temporal.detach(),
+            "propagator_alpha_event": alpha_event.detach(),
+            "propagator_gate_entropy": gate_entropy.detach(),
+            "propagator_event_intensity_mean": propagator_event_intensity_mean.detach(),
         }

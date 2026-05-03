@@ -65,6 +65,7 @@ class ConfigTest(unittest.TestCase):
                             "dataset_group": "sources",
                             "input_len": 12,
                             "output_len": 12,
+                            "batch_size": 16,
                         },
                     }
                 ]
@@ -77,6 +78,8 @@ class ConfigTest(unittest.TestCase):
         stage_data = expanded["pipeline"]["stages"][0]["data"]
         self.assertNotIn("dataset_group", stage_data)
         self.assertEqual(stage_data["datasets"][0]["name"], "METR-LA")
+        self.assertEqual(stage_data["datasets"][0]["batch_size"], 16)
+        self.assertEqual(stage_data["datasets"][1]["batch_size"], 16)
         self.assertEqual(stage_data["datasets"][1]["graph_path"], "data/PEMS-BAY/adj.npz")
 
 

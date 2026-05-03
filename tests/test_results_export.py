@@ -147,6 +147,69 @@ class ResultsExportTest(unittest.TestCase):
         self.assertEqual(summary[1]["PEMS08 FS"], 12.0)
         self.assertEqual(summary[1]["PEMS08 Gain"], 8.0)
 
+    def test_pretty_model_name_budget_dpm_sr_and_srpp(self):
+        dpm_sr = {
+            "experiment_name": "dpm_sr_monash15_then_mixed_12_basicts_budget",
+            "model_type": "SRDSTFMBackbone",
+        }
+        dpm_srpp = {
+            "experiment_name": "dpm_srpp_monash15_then_mixed_12_basicts_budget",
+            "model_type": "SRDSTFMBackbone",
+        }
+        other_srd = {
+            "experiment_name": "custom_srd_eval_run",
+            "model_type": "SRDSTFMBackbone",
+        }
+        self.assertEqual(pretty_model_name(dpm_sr), "DPM-SR")
+        self.assertEqual(pretty_model_name(dpm_srpp), "DPM-SR++")
+        self.assertEqual(pretty_model_name(other_srd), "DPM-STFM")
+
+        datasets, summary = build_paper_summary(
+            [
+                {
+                    **dpm_sr,
+                    "stage_name": "metr_la_zero_shot",
+                    "dataset": "METR-LA",
+                    "eval_only": True,
+                    "test/metric/mae": 7.0,
+                },
+                {
+                    **dpm_srpp,
+                    "stage_name": "metr_la_zero_shot",
+                    "dataset": "METR-LA",
+                    "eval_only": True,
+                    "test/metric/mae": 6.5,
+                },
+            ],
+            split="test",
+            metric="metric/mae",
+            datasets=["METR-LA"],
+            model_order=["DPM-SR", "DPM-SR++"],
+        )
+        self.assertEqual([r["Model"] for r in summary], ["DPM-SR", "DPM-SR++"])
+        self.assertEqual(summary[0]["METR-LA ZS"], 7.0)
+        self.assertEqual(summary[1]["METR-LA ZS"], 6.5)
+
+    def test_pretty_model_name_unist_lite_budget(self):
+        self.assertEqual(
+            pretty_model_name(
+                {
+                    "experiment_name": "unist_monash15_then_mixed_12_basicts_budget_lite",
+                    "model_type": "UniSTFoundationModel",
+                }
+            ),
+            "UniST-lite",
+        )
+        self.assertEqual(
+            pretty_model_name(
+                {
+                    "experiment_name": "unist_monash15_then_mixed_12_basicts_budget_lite_head",
+                    "model_type": "UniSTFoundationModel",
+                }
+            ),
+            "UniST-lite+Head",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

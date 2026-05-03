@@ -189,10 +189,15 @@ def _expand_dataset_node(
 
     if dataset_keys:
         merged = dict(expanded)
-        datasets = [
-            _expand_dataset_node(_lookup_dataset_entry(key, registry), registry=registry, groups=groups)
-            for key in dataset_keys
-        ]
+        ds_batch = merged.get("batch_size")
+        datasets = []
+        for key in dataset_keys:
+            entry = _lookup_dataset_entry(key, registry)
+            if isinstance(ds_batch, int):
+                entry = deep_merge(entry, {"batch_size": int(ds_batch)})
+            datasets.append(
+                _expand_dataset_node(entry, registry=registry, groups=groups, is_root=False)
+            )
         explicit = merged.get("datasets", [])
         if explicit:
             if not isinstance(explicit, list):
