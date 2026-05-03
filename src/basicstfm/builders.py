@@ -28,6 +28,7 @@ BUILTIN_MODULES = (
     "basicstfm.tasks.masked_reconstruction",
     "basicstfm.tasks.stable_residual_forecasting_task",
     "basicstfm.engines.trainer",
+    "basicstfm.models.baselines",
 )
 
 

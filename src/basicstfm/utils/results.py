@@ -132,6 +132,7 @@ def infer_stage_regime(row: Mapping[str, Any]) -> str:
             "head_tuning",
             "finetune",
             "fine_tune",
+            "supervised",
         )
     ):
         return "few_shot"
@@ -156,6 +157,16 @@ def pretty_model_name(row: Mapping[str, Any]) -> str:
         return "UniST-lite"
     if experiment_name_raw == "unist_monash15_then_mixed_12_basicts_budget_lite_head":
         return "UniST-lite+Head"
+    if experiment_name_raw == "uniflow_monash15_then_mixed_12_basicts_budget_lite":
+        return "UniFlow"
+    if experiment_name_raw == "stpformer_monash15_then_mixed_12_target_fewshot":
+        return "STPFormer"
+    if experiment_name_raw == "urbandit_monash15_then_mixed_12_basicts_budget_lite":
+        return "UrbanDiT-lite"
+    if experiment_name_raw == "st_mambasync_monash15_then_mixed_12_basicts_budget":
+        return "ST-MambaSync"
+    if experiment_name_raw == "chronos2_zero_shot_monash15_then_mixed_12":
+        return "Chronos2-ZS"
     experiment_mapping = {
         "opencity_traffic_benchmark": "OpenCity",
         "opencity_largest_transfer": "OpenCity-LargeST",
@@ -218,6 +229,11 @@ def pretty_model_name(row: Mapping[str, Any]) -> str:
         "OpenCityFoundationModel": "OpenCity",
         "FactoSTFoundationModel": "FactoST",
         "UniSTFoundationModel": "UniST",
+        "UniFlowFoundationModel": "UniFlow",
+        "STPFormerExpert": "STPFormer",
+        "UrbanDiTLiteFoundationModel": "UrbanDiT-lite",
+        "STMambaSyncFoundationModel": "ST-MambaSync",
+        "Chronos2ZeroShotForecaster": "Chronos2-ZS",
         "SRDSTFMBackbone": "DPM-STFM",
         "DPMV2Backbone": "DPM-STFM-v2",
         "DPMV3Backbone": "DPM-STFM-v3",
