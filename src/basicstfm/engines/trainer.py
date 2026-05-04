@@ -1064,10 +1064,15 @@ class MultiStageTrainer:
             self.stage_results = list(payload)
 
     def _write_stage_results(self) -> None:
+        exp_block = self.cfg.get("experiment")
+        exp_protocol = None
+        if isinstance(exp_block, dict):
+            exp_protocol = exp_block.get("protocol")
         payload = {
             "experiment_name": str(self.cfg.get("experiment_name", "basicstfm_experiment")),
             "work_dir": str(self.work_dir),
             "updated_at": datetime.now().isoformat(timespec="seconds"),
+            "experiment_protocol": exp_protocol,
             "stages": self.stage_results,
         }
         self._stage_results_path().write_text(

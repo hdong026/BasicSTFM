@@ -39,10 +39,12 @@ def flatten_stage_results(
     rows: List[Dict[str, Any]] = []
     experiment_name = payload.get("experiment_name")
     work_dir = payload.get("work_dir")
+    experiment_protocol = payload.get("experiment_protocol")
     for stage in payload.get("stages", []):
         row: Dict[str, Any] = {
             "experiment_name": experiment_name,
             "work_dir": work_dir,
+            "experiment_protocol": experiment_protocol,
             "source_path": str(source_path),
             "stage_name": stage.get("name"),
             "stage_index": stage.get("stage_index"),
@@ -118,9 +120,16 @@ def infer_stage_regime(row: Mapping[str, Any]) -> str:
     stage_name = str(row.get("stage_name") or "").lower()
     train_fraction = row.get("train_fraction")
     eval_only = bool(row.get("eval_only"))
+    exp_proto = str(row.get("experiment_protocol") or "").lower()
 
     if eval_only or "zero_shot" in stage_name:
         return "zero_shot"
+    if "full_shot" in stage_name or (
+        exp_proto == "full_shot"
+        and train_fraction in (None, "", 0, 0.0)
+        and any(x in stage_name for x in ("mechanism_tuning", "adaptation", "finetune"))
+    ):
+        return "full_shot"
     if train_fraction not in (None, "", 0, 0.0):
         return "few_shot"
     if any(
@@ -165,8 +174,22 @@ def pretty_model_name(row: Mapping[str, Any]) -> str:
         return "UrbanDiT-lite"
     if experiment_name_raw == "st_mambasync_monash15_then_mixed_12_basicts_budget":
         return "ST-MambaSync"
+    if experiment_name_raw == "dpm_srpp_zed_zero_shot_monash15_then_mixed_12":
+        return "DPM-SR++-ZED-ZS"
+    if experiment_name_raw == "dpm_srpp_zed_few_shot_monash15_then_mixed_12":
+        return "DPM-SR++-ZED-FS"
+    if experiment_name_raw == "dpm_srpp_dsd_zero_shot_monash15_then_mixed_12":
+        return "DPM-SR++-DSD-ZS"
+    if experiment_name_raw == "dpm_srpp_dsd_few_shot_monash15_then_mixed_12":
+        return "DPM-SR++-DSD-FS"
+    if experiment_name_raw == "dpm_srpp_dsd_full_shot_monash15_then_mixed_12":
+        return "DPM-SR++-DSD-Full"
+    if experiment_name_raw == "dpm_srpp_dsd_monash15_then_mixed_12_basicts_budget_stage2_only_fs":
+        return "DPM-SR++-DSD-FS"
     if experiment_name_raw == "chronos2_zero_shot_monash15_then_mixed_12":
         return "Chronos2-ZS"
+    if experiment_name_raw == "timellm_gpt2_lite_monash15_then_mixed_12_target_fewshot":
+        return "TimeLLM-GPT2-lite"
     experiment_mapping = {
         "opencity_traffic_benchmark": "OpenCity",
         "opencity_largest_transfer": "OpenCity-LargeST",
@@ -234,6 +257,7 @@ def pretty_model_name(row: Mapping[str, Any]) -> str:
         "UrbanDiTLiteFoundationModel": "UrbanDiT-lite",
         "STMambaSyncFoundationModel": "ST-MambaSync",
         "Chronos2ZeroShotForecaster": "Chronos2-ZS",
+        "TimeLLMGPT2Lite": "TimeLLM-GPT2-lite",
         "SRDSTFMBackbone": "DPM-STFM",
         "DPMV2Backbone": "DPM-STFM-v2",
         "DPMV3Backbone": "DPM-STFM-v3",
@@ -417,6 +441,11 @@ def _infer_dataset_name(data_cfg: Any) -> Optional[str]:
     datasets = _infer_dataset_names(data_cfg)
     if datasets:
         return "+".join(datasets)
+    # Prefer registry keys (METR-LA, PEMS03) over Path(...).parent.name (often * _BasicTS).
+    for key in ("dataset_key", "name"):
+        v = data_cfg.get(key)
+        if v:
+            return str(v)
     data_path = data_cfg.get("data_path")
     if not data_path:
         return None

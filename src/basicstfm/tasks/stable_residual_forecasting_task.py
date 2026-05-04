@@ -11,6 +11,7 @@ from basicstfm.losses.disentangle_losses import cross_covariance_penalty
 from basicstfm.losses.stable_losses import stable_forecast_loss
 from basicstfm.registry import TASKS
 from basicstfm.tasks.base import Task, move_to_device
+from basicstfm.utils.domain_routing import build_routing_from_batch
 from basicstfm.utils.persistence_anchor import persistence_forecast_from_input
 from basicstfm.utils.spectral_ops import (
     extract_temporal_trend,
@@ -65,6 +66,9 @@ class StableResidualForecastingTask(Task):
         revin_loss_space: str = "normalized",
         revin_metric_space: str = "raw",
         factost_original_scale: bool = False,
+        log_stage2_per_domain: bool = False,
+        dsd_routing_key: str = "dataset_name",
+        log_zed_metrics: bool = False,
     ) -> None:
         self.input_key = input_key
         self.target_key = target_key
@@ -121,6 +125,9 @@ class StableResidualForecastingTask(Task):
         self.revin_metric_space = rms
 
         self.factost_original_scale = bool(factost_original_scale)
+        self.log_stage2_per_domain = bool(log_stage2_per_domain)
+        self.dsd_routing_key = str(dsd_routing_key)
+        self.log_zed_metrics = bool(log_zed_metrics)
 
         #: Logged once per stage start when RevIN / BasicTS banners apply.
         if self.use_revin:
@@ -230,12 +237,20 @@ class StableResidualForecastingTask(Task):
                 scaled_std_floor=self.revin_scaled_std_floor,
             )
 
+        extra_kw: Dict[str, Any] = {}
+        hook = getattr(model, "prepare_routing_from_batch", None)
+        if callable(hook):
+            extra_kw.update(hook(batch))
+        zed_hook = getattr(model, "prepare_zed_router_aux", None)
+        if callable(zed_hook):
+            extra_kw.update(zed_hook(batch))
         outputs = model(
             x_scaled,
             graph=batch.get("graph"),
             mode=self.model_mode,
             dataset_index=batch.get("dataset_index"),
             target=y_scaled,
+            **extra_kw,
         )
         if not isinstance(outputs, dict):
             raise TypeError("StableResidualForecastingTask expects model outputs to be a dict")
@@ -472,6 +487,53 @@ class StableResidualForecastingTask(Task):
             metric_pred = pred_denorm.detach()
             metric_target = target_denorm.detach()
             out_mask = metric_mask
+
+        if self.log_zed_metrics and isinstance(outputs.get("zed_router_entropy"), torch.Tensor):
+            ze = outputs["zed_router_entropy"]
+            logs["zero_shot/router_entropy"] = ze.mean().detach()
+            if isinstance(outputs.get("zed_fusion_gate"), torch.Tensor):
+                logs["zero_shot/fusion_gate_mean"] = outputs["zed_fusion_gate"].mean().detach()
+            if isinstance(outputs.get("zed_top1_expert"), torch.Tensor):
+                logs["zero_shot/top1_expert"] = outputs["zed_top1_expert"].mean().detach()
+            if isinstance(outputs.get("zed_topk_weight_sum"), torch.Tensor):
+                logs["zero_shot/topk_experts"] = outputs["zed_topk_weight_sum"].mean().detach()
+            logs["stage2/loss_residual"] = l_residual.detach()
+            logs["stage2/loss_final"] = l_final.detach()
+
+        if self.log_stage2_per_domain:
+            br = int(batch["x"].shape[0])
+            routing = build_routing_from_batch(
+                batch, routing_key=self.dsd_routing_key, batch_size=br
+            )
+            keys = routing["keys"]
+            err_f = (pred_denorm - target_denorm).abs()
+            err_r = (y_residual_scaled - residual_target_scaled).abs()
+            gw = outputs.get("dsd_gate_value")
+            for dom in sorted(set(keys)):
+                idx = torch.tensor(
+                    [i for i, kk in enumerate(keys) if kk == dom],
+                    device=device,
+                    dtype=torch.long,
+                )
+                if idx.numel() == 0:
+                    continue
+                lm = loss_mask.index_select(0, idx) if loss_mask is not None else None
+                logs[f"stage2/loss_final/{dom}"] = _scalar_masked_mean(
+                    err_f.index_select(0, idx), lm
+                ).detach()
+                logs[f"stage2/loss_residual/{dom}"] = _scalar_masked_mean(
+                    err_r.index_select(0, idx), lm
+                ).detach()
+                if gw is not None:
+                    logs[f"stage2/fusion_gate/{dom}"] = gw.index_select(0, idx).mean().detach()
+                ew = outputs.get("zed_expert_weights")
+                if isinstance(ew, torch.Tensor) and ew.ndim == 2:
+                    w_mean = ew.index_select(0, idx).mean(dim=0)
+                    for ei in range(w_mean.shape[0]):
+                        logs[f"zero_shot/expert_weight_{ei}/{dom}"] = w_mean[ei].detach()
+                    t1 = outputs.get("zed_top1_expert")
+                    if isinstance(t1, torch.Tensor):
+                        logs[f"zero_shot/top1_expert_mean/{dom}"] = t1.index_select(0, idx).mean().detach()
 
         return {
             "loss": total,

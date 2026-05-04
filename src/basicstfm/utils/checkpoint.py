@@ -566,6 +566,48 @@ def _stable_trunk_channel_inflate_pair(
     return None
 
 
+def _migrate_zed_route_linear_weight(
+    ck_tensor: torch.Tensor,
+    model_tensor: torch.Tensor,
+    *,
+    hidden_dim: int,
+) -> Optional[torch.Tensor]:
+    """Align ZED router / route-gate first Linear when only input channels C differ.
+
+    Feature layout matches ``build_route_features`` (no ``dataset_id_embed``):
+    ``[temporal (2*C), graph_signature (8), residual_event_signature (H)]``.
+    Graph and event columns are independent of C, so they copy verbatim. Overlapping
+    per-channel temporal slots copy from the checkpoint; new channels keep ``model_tensor`` init.
+    """
+
+    if ck_tensor.shape == model_tensor.shape:
+        return ck_tensor.to(device=model_tensor.device, dtype=model_tensor.dtype)
+    if ck_tensor.ndim != 2 or model_tensor.ndim != 2:
+        return None
+    out_rows, in_old = ck_tensor.shape
+    _, in_new = model_tensor.shape
+    if out_rows != model_tensor.shape[0]:
+        return None
+    h = int(hidden_dim)
+    if (in_old - 8 - h) < 0 or (in_new - 8 - h) < 0:
+        return None
+    if (in_old - 8 - h) % 2 != 0 or (in_new - 8 - h) % 2 != 0:
+        return None
+    c_old = (in_old - 8 - h) // 2
+    c_new = (in_new - 8 - h) // 2
+    if 2 * c_old + 8 + h != in_old or 2 * c_new + 8 + h != in_new:
+        return None
+
+    buf = model_tensor.clone()
+    o_g, n_g = 2 * c_old, 2 * c_new
+    buf[:, n_g : n_g + 8] = ck_tensor[:, o_g : o_g + 8].to(device=buf.device, dtype=buf.dtype)
+    buf[:, n_g + 8 :] = ck_tensor[:, o_g + 8 :].to(device=buf.device, dtype=buf.dtype)
+    for c in range(min(c_old, c_new)):
+        buf[:, c] = ck_tensor[:, c].to(device=buf.device, dtype=buf.dtype)
+        buf[:, c_new + c] = ck_tensor[:, c_old + c].to(device=buf.device, dtype=buf.dtype)
+    return buf
+
+
 def adapt_checkpoint_state_dict(
     model: torch.nn.Module,
     checkpoint_state: Dict[str, torch.Tensor],
@@ -644,6 +686,31 @@ def adapt_checkpoint_state_dict(
             out[name] = tensor
             unchanged_keys.append(name)
             continue
+        if name in ("zed_router.net.0.weight", "zed_route_gate.fc.weight"):
+            h_dim = getattr(model, "hidden_dim", None)
+            if h_dim is not None:
+                migrated = _migrate_zed_route_linear_weight(
+                    tensor,
+                    param,
+                    hidden_dim=int(h_dim),
+                )
+                if migrated is not None:
+                    logger.info(
+                        "Migrated ZED routing weight %r (checkpoint in_features=%d -> model in_features=%d): "
+                        "copied graph + event blocks and overlapping temporal channels.",
+                        name,
+                        tensor.shape[1],
+                        param.shape[1],
+                    )
+                    out[name] = migrated
+                    inflated_keys.append(name)
+                    continue
+        if name.startswith("zed_router.") or name.startswith("zed_route_gate."):
+            raise RuntimeError(
+                f"Cannot load {name!r}: checkpoint shape {tuple(tensor.shape)} vs model "
+                f"{tuple(param.shape)} (ZED routing: try matching hidden_dim / router_inputs, "
+                f"or remove dataset_id_embed from router for migration)"
+            )
         if (
             tensor.ndim == 2
             and param.ndim == 2

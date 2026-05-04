@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
 import torch
 from torch import nn
@@ -51,8 +51,10 @@ class SRDSTFMBackbone(nn.Module):
         use_persistence_anchor: bool = False,
         pretrained_path: Optional[str] = None,
         strict_load: bool = False,
+        name: Optional[str] = None,
     ) -> None:
         super().__init__()
+        self.model_name = None if name is None else str(name)
         self.num_nodes = int(num_nodes)
         self.input_dim = int(input_dim)
         self.output_dim = int(output_dim)
@@ -172,7 +174,9 @@ class SRDSTFMBackbone(nn.Module):
         mode: str = "forecast",
         dataset_index: Optional[torch.Tensor] = None,
         target: Optional[torch.Tensor] = None,
+        routing: Optional[dict[str, Any]] = None,
     ) -> dict[str, torch.Tensor]:
+        _ = routing  # Used by SRDSTFMBackboneDSD only
         x, padded_mask, original_channels = self._pad_input(x, mask)
         target = self._pad_target(target)
 

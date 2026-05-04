@@ -25,6 +25,7 @@ dependencies = [
 
 [project.optional-dependencies]
 chronos = ["chronos-forecasting>=2.0"]
+llm = ["transformers>=4.36", "tokenizers>=0.15"]
 hf = ["datasets>=3.5", "tqdm>=4.66"]
 dev = [
   "pytest>=7.4",

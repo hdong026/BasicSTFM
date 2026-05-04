@@ -88,6 +88,10 @@ def main(argv: Sequence[str] | None = None) -> None:
         "UniST (XD)",
         "DPM-SR",
         "DPM-SR++",
+        "DPM-SR++-DSD-ZS",
+        "DPM-SR++-DSD-FS",
+        "DPM-SR++-ZED-ZS",
+        "DPM-SR++-ZED-FS",
         "DPM-STFM",
         "DPM-SR (XD)",
         "DPM-SR v4 (XD E2E)",
@@ -224,6 +228,12 @@ _MODEL_COLORS: Dict[str, str] = {
     "UniST (XD, P0 full-eval)": "#009E73",
     "DPM-SR": "#6A3D9A",
     "DPM-SR++": "#332288",
+    # Budget DSD / ZED variants (pretty_model_name in basicstfm.utils.results)
+    "DPM-SR++-DSD-ZS": "#5C4D7D",
+    "DPM-SR++-DSD-FS": "#4A3F75",
+    "DPM-SR++-DSD-Full": "#6B5B95",
+    "DPM-SR++-ZED-ZS": "#2C1058",
+    "DPM-SR++-ZED-FS": "#44337A",
     "DPM-STFM": "#CC79A7",
     "DPM-v2 (XD)": "#E31A1C",
     "DPM-v2 (XD, P0 full-eval)": "#E31A1C",
@@ -294,8 +304,13 @@ def _bar_color_for_model(name: str, index: int) -> str:
 
 
 def _is_highlight_model(name: str) -> bool:
-    # Budget transfer uses DPM-SR / DPM-SR++; older configs still surface as DPM-STFM.
-    return str(name) in {"DPM-STFM", "DPM-SR++"}
+    # Budget transfer uses DPM-SR / DPM-SR++; variants share emphasis in legends/outlines.
+    return str(name) in {
+        "DPM-STFM",
+        "DPM-SR++",
+        "DPM-SR++-DSD-FS",
+        "DPM-SR++-ZED-ZS",
+    }
 
 
 # Short, familiar labels for x-axis when many traffic benchmarks sit side by side

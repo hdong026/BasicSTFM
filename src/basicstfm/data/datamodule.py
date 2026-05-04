@@ -510,6 +510,10 @@ class WindowDataModule:
         batch["y_mask"] = y_mask
         if self.graph is not None:
             batch["graph"] = self.graph
+        n = batch["x"].shape[0]
+        ds_name = self.name or infer_dataset_key_from_data_path(str(self.data_path))
+        batch["dataset_name"] = ds_name
+        batch["dataset_index"] = torch.zeros((n,), dtype=torch.long)
         return batch
 
     def _limit_train_dataset(self, dataset: Dataset) -> Dataset:

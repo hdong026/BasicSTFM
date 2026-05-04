@@ -7,6 +7,9 @@ tables>=3.8
 torch==2.6.0
 tqdm>=4.66
 
+[chronos]
+chronos-forecasting>=2.0
+
 [dev]
 pytest>=7.4
 ruff>=0.4
@@ -14,3 +17,7 @@ ruff>=0.4
 [hf]
 datasets>=3.5
 tqdm>=4.66
+
+[llm]
+transformers>=4.36
+tokenizers>=0.15

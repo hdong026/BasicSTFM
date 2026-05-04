@@ -1,0 +1,661 @@
+# DPM_SRPP_DSD — zero_shot: no target-domain adaptation stages (eval only on targets with shared/fallback heads).
+
+experiment_name: dpm_srpp_dsd_zero_shot_monash15_then_mixed_12
+experiment:
+  protocol: few_shot
+seed: 42
+trainer:
+  type: MultiStageTrainer
+  device: auto
+  work_dir: runs/dpm_srpp_dsd_zero_shot_monash15_then_mixed_12
+  log_every: 50
+dataset_registry:
+  LargeST_xd_part0:
+    name: LargeST_xd_part0
+    data_path: data/LargeST_xd_part0/data.npz
+    graph_path: data/LargeST_xd_part0/adj.npz
+    batch_size: 4
+  LargeST_xd_part1:
+    name: LargeST_xd_part1
+    data_path: data/LargeST_xd_part1/data.npz
+    graph_path: data/LargeST_xd_part1/adj.npz
+    batch_size: 4
+  KnowAir:
+    name: KnowAir
+    data_path: data/KnowAir/data.npz
+    graph_path: data/KnowAir/adj.npz
+    batch_size: 4
+  Weather:
+    name: Weather
+    data_path: data/Weather/data.npz
+    graph_path: data/Weather/adj.npz
+    batch_size: 4
+  ETTm1:
+    name: ETTm1
+    data_path: data/ETTm1/data.npz
+    graph_path: data/ETTm1/adj.npz
+    batch_size: 4
+  METR-LA:
+    name: METR-LA
+    data_path: data/METR-LA_BasicTS/data.npz
+    graph_path: data/METR-LA/adj.npz
+    batch_size: 8
+  PEMS04:
+    name: PEMS04
+    data_path: data/PEMS04_BasicTS/data.npz
+    graph_path: data/PEMS04/adj.npz
+    batch_size: 8
+  PEMS07:
+    name: PEMS07
+    data_path: data/PEMS07_BasicTS/data.npz
+    graph_path: data/PEMS07/adj.npz
+    batch_size: 8
+  PEMS08:
+    name: PEMS08
+    data_path: data/PEMS08_BasicTS/data.npz
+    graph_path: data/PEMS08/adj.npz
+    batch_size: 8
+  PEMS-BAY:
+    name: PEMS-BAY
+    data_path: data/PEMS-BAY_BasicTS/data.npz
+    graph_path: data/PEMS-BAY/adj.npz
+    batch_size: 8
+  PEMS03:
+    name: PEMS03
+    data_path: data/PEMS03_BasicTS/data.npz
+    graph_path: data/PEMS03/adj.npz
+    batch_size: 8
+  australian_electricity_demand:
+    name: australian_electricity_demand
+    monash_root: data/Monash15/australian_electricity_demand
+    batch_size: 4
+  london_smart_meters:
+    name: london_smart_meters
+    monash_root: data/Monash15/london_smart_meters
+    batch_size: 4
+  solar_10_minutes:
+    name: solar_10_minutes
+    monash_root: data/Monash15/solar_10_minutes
+    batch_size: 4
+  solar_4_seconds:
+    name: solar_4_seconds
+    monash_root: data/Monash15/solar_4_seconds
+    batch_size: 4
+  wind_farms_minutely:
+    name: wind_farms_minutely
+    monash_root: data/Monash15/wind_farms_minutely
+    batch_size: 4
+  wind_4_seconds:
+    name: wind_4_seconds
+    monash_root: data/Monash15/wind_4_seconds
+    batch_size: 4
+  weather:
+    name: weather
+    monash_root: data/Monash15/weather
+    batch_size: 4
+  kdd_cup_2018:
+    name: kdd_cup_2018
+    monash_root: data/Monash15/kdd_cup_2018
+    batch_size: 4
+  temperature_rain:
+    name: temperature_rain
+    monash_root: data/Monash15/temperature_rain
+    batch_size: 4
+  saugeenday:
+    name: saugeenday
+    monash_root: data/Monash15/saugeenday
+    batch_size: 4
+  sunspot:
+    name: sunspot
+    monash_root: data/Monash15/sunspot
+    batch_size: 4
+  pedestrian_counts:
+    name: pedestrian_counts
+    monash_root: data/Monash15/pedestrian_counts
+    batch_size: 4
+  kaggle_web_traffic:
+    name: kaggle_web_traffic
+    monash_root: data/Monash15/kaggle_web_traffic
+    batch_size: 4
+  bitcoin:
+    name: bitcoin
+    monash_root: data/Monash15/bitcoin
+    batch_size: 4
+  us_births:
+    name: us_births
+    monash_root: data/Monash15/us_births
+    batch_size: 4
+  weather_smoke:
+    name: weather_smoke
+    monash_root: data/Monash15_smoke/weather
+    batch_size: 4
+  australian_electricity_demand_smoke:
+    name: australian_electricity_demand_smoke
+    monash_root: data/Monash15_smoke/australian_electricity_demand
+    batch_size: 4
+  bitcoin_smoke:
+    name: bitcoin_smoke
+    monash_root: data/Monash15_smoke/bitcoin
+    batch_size: 4
+dataset_groups:
+  cross_domain_sharded_sources:
+  - LargeST_xd_part0
+  - LargeST_xd_part1
+  - KnowAir
+  - Weather
+  - ETTm1
+  monash15_sources:
+  - australian_electricity_demand
+  - london_smart_meters
+  - solar_10_minutes
+  - solar_4_seconds
+  - wind_farms_minutely
+  - wind_4_seconds
+  - weather
+  - kdd_cup_2018
+  - temperature_rain
+  - saugeenday
+  - sunspot
+  - pedestrian_counts
+  - kaggle_web_traffic
+  - bitcoin
+  - us_births
+data:
+  type: WindowDataModule
+  dataset_key: METR-LA
+  input_len: 12
+  output_len: 12
+  batch_size: 8
+  split:
+  - 0.7
+  - 0.1
+  - 0.2
+  scaler:
+    type: standard
+model:
+  type: SRDSTFMBackboneDSD
+  name: DPM_SRPP_DSD
+  num_nodes: auto
+  input_dim: auto
+  output_dim: auto
+  input_len: auto
+  output_len: auto
+  hidden_dim: 128
+  residual_mode: forecast
+  fusion_mode: additive
+  use_frequency_branch: true
+  num_datasets: 5
+  diffusion_enabled: true
+  use_inertia_gate: true
+  use_attenuation_gate: true
+  use_persistence_anchor: true
+  stage2:
+    dataset_specific: true
+    known_domains:
+    - METR-LA
+    - PEMS03
+    - PEMS04
+    - PEMS07
+    - PEMS08
+    - PEMS-BAY
+    routing_key: dataset_name
+    head_mode: adapter
+    share_event_abstraction: true
+    share_diffusion_base: true
+    per_dataset_fusion_gate: true
+    fusion_gate_init: 0.1
+    adapter_bottleneck: 32
+    fallback_head: shared
+pipeline:
+  stages:
+  - name: monash_temporal_warmup
+    save_artifact: dpm_budget_monash_warmup
+    reset_data: true
+    data:
+      type: MonashMultiDatasetWindowDataModule
+      dataset_group: monash15_sources
+      input_len: 12
+      output_len: 12
+      num_workers: 2
+      train_strategy: round_robin
+      eval_strategy: per_dataset
+      steps_per_epoch: 10000
+      max_val_windows: 256
+      max_test_windows: 512
+      split:
+      - 0.7
+      - 0.1
+      - 0.2
+      scaler:
+        type: identity
+      norm_mode: instance_standard
+    epochs: 4
+    freeze:
+    - all
+    unfreeze:
+    - stable_trunk.*
+    task:
+      type: StableResidualForecastingTaskV5
+      log_stage2_per_domain: true
+      dsd_routing_key: dataset_name
+      phase: stable
+      model_mode: stable_pretrain
+      primary_supervision_space: normalized
+      stable_target: lowfreq
+      final_weight: 1.0
+      stable_weight: 0.2
+      residual_weight: 0.2
+      spectral_weight: 0.02
+      spectral_scales:
+      - 1
+      use_revin: false
+    losses:
+    - type: mae
+      weight: 1.0
+      name: norm_mae
+    - type: mse
+      weight: 0.05
+      name: norm_mse
+    metrics:
+    - type: mae
+      name: norm_mae
+    - type: rmse
+      name: norm_rmse
+    optimizer:
+      type: AdamW
+      lr: 0.001
+      weight_decay: 0.0001
+    scheduler:
+      type: CosineAnnealingLR
+      T_max: 4
+    validate_every: 1
+    gradient_clip_val: 5.0
+  - name: cross_domain_stable_trunk_pretraining
+    load_from: ${env:MONASH_STAGE0_CKPT,dpm_budget_monash_warmup}
+    load_method: stable_trunk_channel_inflate
+    strict_load: false
+    save_artifact: srd_xd_stable
+    reset_data: true
+    data:
+      type: MultiDatasetWindowDataModule
+      dataset_group: cross_domain_sharded_sources
+      input_len: 12
+      output_len: 12
+      num_workers: 2
+      train_strategy: round_robin
+      eval_strategy: per_dataset
+      steps_per_epoch: 10000
+      max_val_windows: 256
+      max_test_windows: 512
+      split:
+      - 0.7
+      - 0.1
+      - 0.2
+      scaler:
+        type: standard
+    epochs: 4
+    freeze:
+    - all
+    unfreeze:
+    - stable_trunk.*
+    task:
+      type: StableResidualForecastingTaskV5
+      log_stage2_per_domain: true
+      dsd_routing_key: dataset_name
+      phase: stable
+      model_mode: stable_pretrain
+      stable_target: lowfreq
+      final_weight: 1.0
+      stable_weight: 0.2
+      residual_weight: 0.2
+      spectral_weight: 0.02
+      spectral_scales:
+      - 1
+      use_revin: false
+      robust_stage1: true
+      robust_lambda: 0.3
+      robust_temperature: 1.0
+      robust_ema_momentum: 0.95
+      robust_use_standardized_risk: true
+      robust_topk_groups: 0
+      robust_group_key: graph
+      robust_logsumexp_excess: true
+    losses:
+    - type: mae
+      weight: 1.0
+    - type: mse
+      weight: 0.05
+    metrics:
+    - type: mae
+    - type: rmse
+    optimizer:
+      type: AdamW
+      lr: 0.001
+      weight_decay: 0.0001
+    scheduler:
+      type: CosineAnnealingLR
+      T_max: 4
+    validate_every: 1
+    gradient_clip_val: 5.0
+  - name: cross_domain_residual_diffusion_pretraining
+    save_artifact: srd_xd_diffusion
+    load_from: srd_xd_stable
+    strict_load: true
+    reset_data: true
+    data:
+      type: MultiDatasetWindowDataModule
+      dataset_group: cross_domain_sharded_sources
+      input_len: 12
+      output_len: 12
+      num_workers: 2
+      train_strategy: round_robin
+      eval_strategy: per_dataset
+      steps_per_epoch: 10000
+      max_val_windows: 256
+      max_test_windows: 512
+      split:
+      - 0.7
+      - 0.1
+      - 0.2
+      scaler:
+        type: standard
+    epochs: 4
+    freeze:
+    - all
+    unfreeze:
+    - residual_event_encoder.*
+    - diffusion_mechanism_learner.*
+    - dsd_adapters.*
+    - dsd_fusion_gates.*
+    task:
+      type: StableResidualForecastingTaskV5
+      log_stage2_per_domain: true
+      dsd_routing_key: dataset_name
+      phase: diffusion
+      model_mode: diffusion_pretrain
+      stable_target: lowfreq
+      final_weight: 1.0
+      stable_weight: 0.2
+      residual_weight: 0.2
+      spectral_weight: 0.02
+      spectral_scales:
+      - 1
+      use_revin: false
+    losses:
+    - type: mae
+      weight: 1.0
+    - type: mse
+      weight: 0.05
+    metrics:
+    - type: mae
+    - type: rmse
+    optimizer:
+      type: AdamW
+      lr: 0.0008
+      weight_decay: 0.0001
+    scheduler:
+      type: CosineAnnealingLR
+      T_max: 4
+    validate_every: 1
+    gradient_clip_val: 5.0
+  - name: cross_domain_joint_refinement
+    save_artifact: srd_xd_joint
+    load_from: srd_xd_diffusion
+    strict_load: true
+    reset_data: true
+    data:
+      type: MultiDatasetWindowDataModule
+      dataset_group: cross_domain_sharded_sources
+      input_len: 12
+      output_len: 12
+      num_workers: 2
+      train_strategy: round_robin
+      eval_strategy: per_dataset
+      steps_per_epoch: 10000
+      max_val_windows: 256
+      max_test_windows: 512
+      split:
+      - 0.7
+      - 0.1
+      - 0.2
+      scaler:
+        type: standard
+    epochs: 2
+    freeze:
+    - all
+    unfreeze:
+    - residual_event_encoder.*
+    - diffusion_mechanism_learner.*
+    - dsd_adapters.*
+    - dsd_fusion_gates.*
+    - fusion_predictor.*
+    - calibration_head.*
+    task:
+      type: StableResidualForecastingTaskV5
+      log_stage2_per_domain: true
+      dsd_routing_key: dataset_name
+      phase: joint
+      model_mode: forecast
+      stable_target: lowfreq
+      final_weight: 1.0
+      stable_weight: 0.2
+      residual_weight: 0.2
+      spectral_weight: 0.02
+      spectral_scales:
+      - 1
+      use_revin: false
+    losses:
+    - type: mae
+      weight: 1.0
+    - type: mse
+      weight: 0.05
+    metrics:
+    - type: mae
+    - type: rmse
+    optimizer:
+      type: AdamW
+      lr: 0.0005
+      weight_decay: 0.0001
+    scheduler:
+      type: CosineAnnealingLR
+      T_max: 2
+    validate_every: 1
+    gradient_clip_val: 5.0
+  - name: metr_la_zero_shot
+    eval_only: true
+    epochs: 0
+    reset_data: true
+    data:
+      type: WindowDataModule
+      dataset_key: METR-LA
+      input_len: 12
+      output_len: 12
+      batch_size: 8
+      split:
+      - 0.6
+      - 0.2
+      - 0.2
+      scaler:
+        type: standard
+      split_mode: basicts
+    load_from: srd_xd_joint
+    strict_load: true
+    task:
+      type: StableResidualForecastingTaskV5
+      log_stage2_per_domain: true
+      dsd_routing_key: dataset_name
+      phase: joint
+      model_mode: forecast
+      use_revin: false
+      primary_supervision_space: denormalized
+      basicts_scale_logging: true
+    losses:
+    - type: mae
+    metrics:
+    - type: mae
+    - type: rmse
+  - name: pems03_zero_shot
+    eval_only: true
+    epochs: 0
+    reset_data: true
+    data:
+      type: WindowDataModule
+      dataset_key: PEMS03
+      input_len: 12
+      output_len: 12
+      batch_size: 8
+      split:
+      - 0.6
+      - 0.2
+      - 0.2
+      scaler:
+        type: standard
+      split_mode: basicts
+    load_from: srd_xd_joint
+    strict_load: true
+    task:
+      type: StableResidualForecastingTaskV5
+      log_stage2_per_domain: true
+      dsd_routing_key: dataset_name
+      phase: joint
+      model_mode: forecast
+      use_revin: false
+      primary_supervision_space: denormalized
+      basicts_scale_logging: true
+    losses:
+    - type: mae
+    metrics:
+    - type: mae
+    - type: rmse
+  - name: pems04_zero_shot
+    eval_only: true
+    epochs: 0
+    reset_data: true
+    data:
+      type: WindowDataModule
+      dataset_key: PEMS04
+      input_len: 12
+      output_len: 12
+      batch_size: 8
+      split:
+      - 0.6
+      - 0.2
+      - 0.2
+      scaler:
+        type: standard
+      split_mode: basicts
+    load_from: srd_xd_joint
+    strict_load: true
+    task:
+      type: StableResidualForecastingTaskV5
+      log_stage2_per_domain: true
+      dsd_routing_key: dataset_name
+      phase: joint
+      model_mode: forecast
+      use_revin: false
+      primary_supervision_space: denormalized
+      basicts_scale_logging: true
+    losses:
+    - type: mae
+    metrics:
+    - type: mae
+    - type: rmse
+  - name: pems07_zero_shot
+    eval_only: true
+    epochs: 0
+    reset_data: true
+    data:
+      type: WindowDataModule
+      dataset_key: PEMS07
+      input_len: 12
+      output_len: 12
+      batch_size: 8
+      split:
+      - 0.6
+      - 0.2
+      - 0.2
+      scaler:
+        type: standard
+      split_mode: basicts
+    load_from: srd_xd_joint
+    strict_load: true
+    task:
+      type: StableResidualForecastingTaskV5
+      log_stage2_per_domain: true
+      dsd_routing_key: dataset_name
+      phase: joint
+      model_mode: forecast
+      use_revin: false
+      primary_supervision_space: denormalized
+      basicts_scale_logging: true
+    losses:
+    - type: mae
+    metrics:
+    - type: mae
+    - type: rmse
+  - name: pems08_zero_shot
+    eval_only: true
+    epochs: 0
+    reset_data: true
+    data:
+      type: WindowDataModule
+      dataset_key: PEMS08
+      input_len: 12
+      output_len: 12
+      batch_size: 8
+      split:
+      - 0.6
+      - 0.2
+      - 0.2
+      scaler:
+        type: standard
+      split_mode: basicts
+    load_from: srd_xd_joint
+    strict_load: true
+    task:
+      type: StableResidualForecastingTaskV5
+      log_stage2_per_domain: true
+      dsd_routing_key: dataset_name
+      phase: joint
+      model_mode: forecast
+      use_revin: false
+      primary_supervision_space: denormalized
+      basicts_scale_logging: true
+    losses:
+    - type: mae
+    metrics:
+    - type: mae
+    - type: rmse
+  - name: pems_bay_zero_shot
+    eval_only: true
+    epochs: 0
+    reset_data: true
+    data:
+      type: WindowDataModule
+      dataset_key: PEMS-BAY
+      input_len: 12
+      output_len: 12
+      batch_size: 8
+      split:
+      - 0.6
+      - 0.2
+      - 0.2
+      scaler:
+        type: standard
+      split_mode: basicts
+    load_from: srd_xd_joint
+    strict_load: true
+    task:
+      type: StableResidualForecastingTaskV5
+      log_stage2_per_domain: true
+      dsd_routing_key: dataset_name
+      phase: joint
+      model_mode: forecast
+      use_revin: false
+      primary_supervision_space: denormalized
+      basicts_scale_logging: true
+    losses:
+    - type: mae
+    metrics:
+    - type: mae
+    - type: rmse

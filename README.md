@@ -75,6 +75,7 @@ basicstfm --help
 
 ### Optional baseline extras
 
+- **TimeLLM-GPT2-lite** (`TimeLLMGPT2Lite`): non-graph few-shot baseline that feeds per-node windows into a **frozen** Hugging Face `GPT2Model` (or an explicit `backend: fallback_transformer` PyTorch encoder). Install GPT-2 weights support with `pip install -e ".[llm]"`. This is a lightweight protocol adapter, not a full Time-LLM paper reproduction (see config header comments).
 - **Chronos-2 zero-shot** (`Chronos2ZeroShotForecaster`): install with `pip install -e ".[chronos]"` (wraps `chronos-forecasting`). Sanity configs live under `configs/budget_matched/chronos2_zero_shot_monash15_then_mixed_12.yaml` and use `basicstfm train` with `eval_only` stages (there is no separate `evaluate` subcommand).
 - **ST-MambaSync** (`STMambaSyncFoundationModel`): the config name refers to *MambaSync*-style behaviour; the reference implementation is a **bidirectional depthwise gated temporal conv** plus graph mixing (`src/basicstfm/models/baselines/st_mamba_sync.py`), not the `mamba_ssm` CUDA selective scan stack.
 

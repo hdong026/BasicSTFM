@@ -90,6 +90,15 @@ class ResultsExportTest(unittest.TestCase):
         row = {"test/metric/mae": 9.0, "test/metric/mae_original": 3.0}
         self.assertEqual(coalesce_metric_row(row, "test/metric/mae"), 9.0)
 
+    def test_infer_full_shot_regime(self):
+        row = {
+            "stage_name": "metr_la_full_shot_adaptation",
+            "eval_only": False,
+            "train_fraction": None,
+            "experiment_protocol": "full_shot",
+        }
+        self.assertEqual(infer_stage_regime(row), "full_shot")
+
     def test_paper_summary_groups_zero_and_few_shot_rows(self):
         rows = [
             {
@@ -163,6 +172,15 @@ class ResultsExportTest(unittest.TestCase):
         self.assertEqual(pretty_model_name(dpm_sr), "DPM-SR")
         self.assertEqual(pretty_model_name(dpm_srpp), "DPM-SR++")
         self.assertEqual(pretty_model_name(other_srd), "DPM-STFM")
+
+        self.assertEqual(
+            pretty_model_name({"experiment_name": "dpm_srpp_dsd_zero_shot_monash15_then_mixed_12"}),
+            "DPM-SR++-DSD-ZS",
+        )
+        self.assertEqual(
+            pretty_model_name({"experiment_name": "dpm_srpp_dsd_full_shot_monash15_then_mixed_12"}),
+            "DPM-SR++-DSD-Full",
+        )
 
         datasets, summary = build_paper_summary(
             [
