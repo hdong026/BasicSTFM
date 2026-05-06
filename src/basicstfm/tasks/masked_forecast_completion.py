@@ -27,7 +27,9 @@ class MaskedForecastCompletionTask(Task):
         output_key: str = "reconstruction",
         mask_value: float = 0.0,
         model_mode: str = "reconstruct",
+        **kwargs: Any,
     ) -> None:
+        del kwargs  # e.g. few_shot_calibration_stage / anchor_* from MultiStageTrainer for other tasks
         self.input_key = input_key
         self.target_key = target_key
         self.output_key = output_key

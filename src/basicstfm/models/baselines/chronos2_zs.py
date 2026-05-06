@@ -11,23 +11,40 @@ from basicstfm.models.foundation.common import ensure_4d
 from basicstfm.registry import MODELS
 
 
-def _lazy_import_chronos_pipeline_class() -> Any:
-    try:
-        from chronos import Chronos2Pipeline  # type: ignore
+def _resolve_chronos_pipeline_class(pretrained_model_id: str) -> Any:
+    """Pick Chronos2 / Bolt / v1 (T5 seq2seq) pipeline from the checkpoint config.
 
-        return Chronos2Pipeline
-    except ImportError:
-        pass
+    ``Chronos2Pipeline`` only resolves classes exported on ``chronos.chronos2``; Hub ids like
+    ``amazon/chronos-t5-small`` still use ``T5ForConditionalGeneration``, which must be loaded via
+    ``ChronosPipeline`` (``AutoModelForSeq2SeqLM``), not Chronos-2's loader.
+    """
     try:
-        from chronos import ChronosPipeline  # type: ignore
-
-        return ChronosPipeline
+        from transformers import AutoConfig  # type: ignore
     except ImportError as exc:
         raise ImportError(
-            "Chronos2 zero-shot requires the ``chronos-forecasting`` package. "
+            "Chronos zero-shot requires ``transformers`` (pulled in by chronos-forecasting)."
+        ) from exc
+
+    try:
+        import chronos.chronos2 as chronos2_mod  # type: ignore
+        import chronos.chronos_bolt as chronos_bolt_mod  # type: ignore
+        from chronos import Chronos2Pipeline, ChronosBoltPipeline, ChronosPipeline  # type: ignore
+    except ImportError as exc:
+        raise ImportError(
+            "Chronos zero-shot requires the ``chronos-forecasting`` package. "
             "Install with: pip install 'chronos-forecasting>=2.2' "
             "or: pip install -e '.[chronos]'"
         ) from exc
+
+    config = AutoConfig.from_pretrained(pretrained_model_id)
+    archs = getattr(config, "architectures", None) or []
+    arch0: Optional[str] = archs[0] if archs else None
+
+    if arch0 and hasattr(chronos2_mod, arch0):
+        return Chronos2Pipeline
+    if arch0 and hasattr(chronos_bolt_mod, arch0):
+        return ChronosBoltPipeline
+    return ChronosPipeline
 
 
 @MODELS.register("Chronos2ZeroShotForecaster")
@@ -68,7 +85,7 @@ class Chronos2ZeroShotForecaster(nn.Module):
     def _ensure_pipeline(self, device: torch.device) -> None:
         if self._pipeline is not None and self._pipeline_device == device:
             return
-        pipe_cls = _lazy_import_chronos_pipeline_class()
+        pipe_cls = _resolve_chronos_pipeline_class(self.pretrained_model_id)
         device_map = str(device) if device.type == "cuda" else "cpu"
         try:
             self._pipeline = pipe_cls.from_pretrained(self.pretrained_model_id, device_map=device_map)
@@ -82,19 +99,31 @@ class Chronos2ZeroShotForecaster(nn.Module):
         h = self.output_len
         q = self.quantile_level
         ctx = context_1d[None, :].contiguous().float().to(device)
+        # Chronos-1 / Bolt: ``inputs`` is (batch, history). Chronos-2 requires (n_series, n_variates, history).
+        if type(pipe).__name__ == "Chronos2Pipeline":
+            inputs = ctx.unsqueeze(1)
+        else:
+            inputs = ctx
+        # v1 tokenizer bins live on CPU; bucketize requires context and boundaries on the same device.
+        predict_inputs = inputs if type(pipe).__name__ == "Chronos2Pipeline" else inputs.cpu()
 
         if hasattr(pipe, "predict_quantiles"):
-            out = pipe.predict_quantiles(
-                context=ctx,
+            quant_out = pipe.predict_quantiles(
+                predict_inputs,
                 prediction_length=h,
                 quantile_levels=[q],
             )
-            if isinstance(out, (list, tuple)):
-                median = out[0]
+            # Chronos2Pipeline: (list[Tensor], list[Tensor]); each quantile tensor is (n_variates, H, Q).
+            if isinstance(quant_out[0], list):
+                q_tensor = quant_out[0][0]
+                median = q_tensor[..., 0]
             else:
-                median = out
+                quantiles = quant_out[0]
+                median = quantiles[..., 0]
         elif hasattr(pipe, "predict"):
-            median = pipe.predict(context=ctx, prediction_length=h)
+            median = pipe.predict(predict_inputs, prediction_length=h)
+            if isinstance(median, torch.Tensor) and median.ndim >= 3:
+                median = median.median(dim=1).values
         else:
             raise RuntimeError("Chronos pipeline has no predict_quantiles or predict")
 
@@ -106,7 +135,7 @@ class Chronos2ZeroShotForecaster(nn.Module):
             y = y.view(1, -1)
         if y.shape[-1] != h:
             y = y[..., :h]
-        return y.view(-1)[:h]
+        return y.reshape(-1)[:h]
 
     def forward(
         self,

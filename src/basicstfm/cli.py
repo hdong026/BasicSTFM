@@ -48,6 +48,7 @@ def main(argv: Optional[list[str]] = None) -> None:
                 {
                     "stages": plan.describe(),
                     "factost_protocol_audit": StagePlan.describe_factost_protocol_audit(cfg),
+                    "few_shot_protocol": StagePlan.describe_few_shot_protocol(cfg),
                 },
                 indent=2,
                 ensure_ascii=False,

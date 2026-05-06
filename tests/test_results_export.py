@@ -149,12 +149,92 @@ class ResultsExportTest(unittest.TestCase):
         self.assertEqual(datasets, ["METR-LA", "PEMS08"])
         self.assertEqual(summary[0]["Model"], "OpenCity")
         self.assertEqual(summary[0]["METR-LA ZS"], 6.0)
-        self.assertEqual(summary[0]["METR-LA FS"], 5.0)
-        self.assertEqual(summary[0]["METR-LA Gain"], 1.0)
+        self.assertEqual(summary[0]["METR-LA FS (5%)"], 5.0)
+        self.assertEqual(summary[0]["METR-LA FS (10%)"], None)
+        self.assertEqual(summary[0]["METR-LA Gain (5%)"], 1.0)
         self.assertEqual(summary[1]["Model"], "FactoST")
         self.assertEqual(summary[1]["PEMS08 ZS"], 20.0)
-        self.assertEqual(summary[1]["PEMS08 FS"], 12.0)
-        self.assertEqual(summary[1]["PEMS08 Gain"], 8.0)
+        self.assertEqual(summary[1]["PEMS08 FS (5%)"], 12.0)
+        self.assertEqual(summary[1]["PEMS08 FS (10%)"], None)
+        self.assertEqual(summary[1]["PEMS08 Gain (5%)"], 8.0)
+
+    def test_zed_few_shot_yaml_merges_zs_fs_rows_and_filters_ten_percent(self):
+        rows = [
+            {
+                "experiment_name": "dpm_srpp_zed_few_shot_monash15_then_mixed_12",
+                "stage_name": "metr_la_zero_shot",
+                "dataset": "METR-LA",
+                "eval_only": True,
+                "test/metric/mae": 6.0,
+            },
+            {
+                "experiment_name": "dpm_srpp_zed_few_shot_monash15_then_mixed_12",
+                "stage_name": "metr_la_five_percent_mechanism_tuning",
+                "dataset": "METR-LA",
+                "train_fraction": 0.05,
+                "test/metric/mae": 5.0,
+            },
+            {
+                "experiment_name": "dpm_srpp_zed_few_shot_monash15_then_mixed_12",
+                "stage_name": "metr_la_ten_percent_mechanism_tuning",
+                "dataset": "METR-LA",
+                "train_fraction": 0.1,
+                "test/metric/mae": 4.0,
+            },
+        ]
+        self.assertEqual(pretty_model_name(rows[0]), "DPM-SR++-ZED-ZS")
+        self.assertEqual(pretty_model_name(rows[1]), "DPM-SR++-ZED-FS")
+        datasets, summary = build_paper_summary(
+            rows,
+            split="test",
+            metric="metric/mae",
+            datasets=["METR-LA"],
+            model_order=["DPM-SR++-ZED"],
+            few_shot_fractions=(0.05,),
+        )
+        self.assertEqual(len(summary), 1)
+        self.assertEqual(summary[0]["Model"], "DPM-SR++-ZED")
+        self.assertEqual(summary[0]["METR-LA ZS"], 6.0)
+        self.assertEqual(summary[0]["METR-LA FS"], 5.0)
+        self.assertEqual(summary[0]["METR-LA Gain"], 1.0)
+
+    def test_zed_few_shot_yaml_includes_both_few_shot_ratios(self):
+        rows = [
+            {
+                "experiment_name": "dpm_srpp_zed_few_shot_monash15_then_mixed_12",
+                "stage_name": "metr_la_zero_shot",
+                "dataset": "METR-LA",
+                "eval_only": True,
+                "test/metric/mae": 6.0,
+            },
+            {
+                "experiment_name": "dpm_srpp_zed_few_shot_monash15_then_mixed_12",
+                "stage_name": "metr_la_five_percent_mechanism_tuning",
+                "dataset": "METR-LA",
+                "train_fraction": 0.05,
+                "test/metric/mae": 5.0,
+            },
+            {
+                "experiment_name": "dpm_srpp_zed_few_shot_monash15_then_mixed_12",
+                "stage_name": "metr_la_ten_percent_mechanism_tuning",
+                "dataset": "METR-LA",
+                "train_fraction": 0.1,
+                "test/metric/mae": 4.0,
+            },
+        ]
+        datasets, summary = build_paper_summary(
+            rows,
+            split="test",
+            metric="metric/mae",
+            datasets=["METR-LA"],
+            model_order=["DPM-SR++-ZED"],
+            few_shot_fractions=(0.05, 0.1),
+        )
+        self.assertEqual(summary[0]["METR-LA ZS"], 6.0)
+        self.assertEqual(summary[0]["METR-LA FS (5%)"], 5.0)
+        self.assertEqual(summary[0]["METR-LA FS (10%)"], 4.0)
+        self.assertEqual(summary[0]["METR-LA Gain (5%)"], 1.0)
+        self.assertEqual(summary[0]["METR-LA Gain (10%)"], 2.0)
 
     def test_pretty_model_name_budget_dpm_sr_and_srpp(self):
         dpm_sr = {
@@ -206,6 +286,7 @@ class ResultsExportTest(unittest.TestCase):
         )
         self.assertEqual([r["Model"] for r in summary], ["DPM-SR", "DPM-SR++"])
         self.assertEqual(summary[0]["METR-LA ZS"], 7.0)
+        self.assertEqual(summary[0].get("METR-LA FS (5%)"), None)
         self.assertEqual(summary[1]["METR-LA ZS"], 6.5)
 
     def test_pretty_model_name_unist_lite_budget(self):

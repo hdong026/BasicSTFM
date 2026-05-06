@@ -50,6 +50,7 @@ class StageSpec:
     train_windows: Optional[int] = None
     few_shot_ratio: Optional[float] = None
     few_shot_windows: Optional[int] = None
+    early_stop_patience: Optional[int] = None
 
     def __post_init__(self) -> None:
         if self.epochs < 1 and not self.eval_only:
@@ -189,3 +190,31 @@ class StagePlan:
                 }
             )
         return audit_rows
+
+    @staticmethod
+    def describe_few_shot_protocol(cfg: Dict[str, Any]) -> Dict[str, Any]:
+        """Surface few-shot stages, freeze rules, and ``model.few_shot`` for dry-run / audits."""
+
+        plan = StagePlan.from_config(cfg)
+        model_fs = (cfg.get("model") or {}).get("few_shot")
+        rows: List[Dict[str, Any]] = []
+        for st in plan.stages:
+            if st.few_shot_ratio is None:
+                continue
+            rows.append(
+                {
+                    "stage": st.name,
+                    "few_shot_ratio": st.few_shot_ratio,
+                    "load_from": st.load_from,
+                    "anchor_to_zero_shot": (
+                        None if not isinstance(model_fs, dict) else model_fs.get("anchor_to_zero_shot")
+                    ),
+                    "freeze": st.freeze,
+                    "unfreeze": st.unfreeze,
+                }
+            )
+        return {
+            "experiment": cfg.get("experiment"),
+            "model_few_shot": model_fs,
+            "few_shot_stages": rows,
+        }

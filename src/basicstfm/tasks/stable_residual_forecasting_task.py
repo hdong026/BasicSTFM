@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import copy
 from typing import Any, Dict, Optional, Sequence, Tuple, Union
 
 import torch
+import torch.nn.functional as F
 
 from basicstfm.data.revin import factost_value_revin_inverse, factost_value_revin_normalize
 from basicstfm.losses.disentangle_losses import cross_covariance_penalty
@@ -69,6 +71,14 @@ class StableResidualForecastingTask(Task):
         log_stage2_per_domain: bool = False,
         dsd_routing_key: str = "dataset_name",
         log_zed_metrics: bool = False,
+        anchor_to_zero_shot: bool = False,
+        lambda_anchor: float = 0.1,
+        lambda_gate: float = 0.01,
+        few_shot_calibration_stage: bool = False,
+        zed_fa_loss: bool = False,
+        lambda_fa_final: float = 1.0,
+        lambda_fa_residual: float = 0.1,
+        lambda_adapter_reg: float = 1e-4,
     ) -> None:
         self.input_key = input_key
         self.target_key = target_key
@@ -128,6 +138,19 @@ class StableResidualForecastingTask(Task):
         self.log_stage2_per_domain = bool(log_stage2_per_domain)
         self.dsd_routing_key = str(dsd_routing_key)
         self.log_zed_metrics = bool(log_zed_metrics)
+
+        self.anchor_to_zero_shot = bool(anchor_to_zero_shot)
+        self.lambda_anchor = float(lambda_anchor)
+        self.lambda_gate = float(lambda_gate)
+        self.few_shot_calibration_stage = bool(few_shot_calibration_stage)
+        self.zed_fa_loss = bool(zed_fa_loss)
+        self.lambda_fa_final = float(lambda_fa_final)
+        self.lambda_fa_residual = float(lambda_fa_residual)
+        self.lambda_adapter_reg = float(lambda_adapter_reg)
+        self._zed_anchor_model: Optional[torch.nn.Module] = None
+        self._few_shot_trainable_logged = False
+        self._few_shot_entropy_before_logged = False
+        self._few_shot_gate_before_logged = False
 
         #: Logged once per stage start when RevIN / BasicTS banners apply.
         if self.use_revin:
@@ -336,12 +359,62 @@ class StableResidualForecastingTask(Task):
         )
 
         w_final, w_stable, w_residual, w_spec = self._phase_weights()
-        total = (
-            w_final * l_final
-            + w_stable * l_stable
-            + w_residual * l_residual
-            + w_spec * l_spec
-        )
+        if self.zed_fa_loss and self.few_shot_calibration_stage:
+            total = self.lambda_fa_final * l_final + self.lambda_fa_residual * l_residual
+        else:
+            total = (
+                w_final * l_final
+                + w_stable * l_stable
+                + w_residual * l_residual
+                + w_spec * l_spec
+            )
+
+        anchor_loss_bt = torch.tensor(0.0, device=device)
+        gate_anchor_bt = torch.tensor(0.0, device=device)
+        adapter_reg_bt = torch.tensor(0.0, device=device)
+        if (
+            self.zed_fa_loss
+            and self.few_shot_calibration_stage
+            and torch.is_grad_enabled()
+        ):
+            from basicstfm.utils.distributed import unwrap_model
+
+            core_reg = unwrap_model(model)
+            if hasattr(core_reg, "zed_fa_adapter_l2_penalty"):
+                adapter_reg_bt = core_reg.zed_fa_adapter_l2_penalty()
+                total = total + self.lambda_adapter_reg * adapter_reg_bt
+        if (
+            self.anchor_to_zero_shot
+            and self.few_shot_calibration_stage
+            and torch.is_grad_enabled()
+        ):
+            from basicstfm.utils.distributed import unwrap_model
+
+            core = unwrap_model(model)
+            if self._zed_anchor_model is None:
+                self._zed_anchor_model = copy.deepcopy(core).to(device)
+                self._zed_anchor_model.eval()
+                for p in self._zed_anchor_model.parameters():
+                    p.requires_grad = False
+            with torch.no_grad():
+                out_zs = self._zed_anchor_model(
+                    x_scaled,
+                    graph=batch.get("graph"),
+                    mode=self.model_mode,
+                    dataset_index=batch.get("dataset_index"),
+                    target=y_scaled,
+                    zed_disable_fa=True,
+                    **extra_kw,
+                )
+            if isinstance(out_zs, dict):
+                y_hat_zs = out_zs[self.output_key]
+                y_hat_zs, _, _ = self._align_pred_target(y_hat_zs, y_scaled, loss_mask)
+                anchor_loss_bt = F.l1_loss(y_hat_scaled, y_hat_zs)
+                g_cur = outputs.get("zed_fusion_gate")
+                g_zs = out_zs.get("zed_fusion_gate")
+                if isinstance(g_cur, torch.Tensor) and isinstance(g_zs, torch.Tensor):
+                    gate_anchor_bt = F.mse_loss(g_cur, g_zs)
+            total = total + self.lambda_anchor * anchor_loss_bt + self.lambda_gate * gate_anchor_bt
 
         logs: Dict[str, torch.Tensor] = dict(main_loss_out["logs"])
         for _pk in (
@@ -500,6 +573,44 @@ class StableResidualForecastingTask(Task):
             logs["stage2/loss_residual"] = l_residual.detach()
             logs["stage2/loss_final"] = l_final.detach()
 
+        if self.few_shot_calibration_stage:
+            logs["fewshot/residual_loss"] = l_residual.detach()
+            logs["fewshot/final_loss"] = l_final.detach()
+            if self.anchor_to_zero_shot and torch.is_grad_enabled():
+                logs["fewshot/anchor_loss"] = anchor_loss_bt.detach()
+                logs["fewshot/gate_anchor_loss"] = gate_anchor_bt.detach()
+            if torch.is_grad_enabled():
+                if not self._few_shot_trainable_logged:
+                    self._few_shot_trainable_logged = True
+                    n_train = sum(p.numel() for p in model.parameters() if p.requires_grad)
+                    n_frozen = sum(p.numel() for p in model.parameters() if not p.requires_grad)
+                    logs["fewshot/trainable_param_count"] = y_hat_scaled.new_tensor(
+                        float(n_train)
+                    )
+                    logs["fewshot/frozen_param_count"] = y_hat_scaled.new_tensor(float(n_frozen))
+                if self.zed_fa_loss and torch.is_grad_enabled():
+                    from basicstfm.utils.distributed import unwrap_model
+
+                    zcore = unwrap_model(model)
+                    if hasattr(zcore, "zed_fa_logging_scalars"):
+                        for fk, fv in zcore.zed_fa_logging_scalars(y_hat_scaled).items():
+                            logs[fk] = fv
+                    logs["fewshot/adapter_reg"] = adapter_reg_bt.detach()
+                ze_fs = outputs.get("zed_router_entropy")
+                if isinstance(ze_fs, torch.Tensor):
+                    if not self._few_shot_entropy_before_logged:
+                        self._few_shot_entropy_before_logged = True
+                        logs["fewshot/router_entropy_before"] = ze_fs.mean().detach()
+                    if self._step_counter % self.log_interval == 0:
+                        logs["fewshot/router_entropy_after"] = ze_fs.mean().detach()
+                gf_fs = outputs.get("zed_fusion_gate")
+                if isinstance(gf_fs, torch.Tensor):
+                    if not self._few_shot_gate_before_logged:
+                        self._few_shot_gate_before_logged = True
+                        logs["fewshot/fusion_gate_before"] = gf_fs.mean().detach()
+                    if self._step_counter % self.log_interval == 0:
+                        logs["fewshot/fusion_gate_after"] = gf_fs.mean().detach()
+
         if self.log_stage2_per_domain:
             br = int(batch["x"].shape[0])
             routing = build_routing_from_batch(
@@ -523,6 +634,19 @@ class StableResidualForecastingTask(Task):
                 ).detach()
                 logs[f"stage2/loss_residual/{dom}"] = _scalar_masked_mean(
                     err_r.index_select(0, idx), lm
+                ).detach()
+                pred_s = pred_denorm.index_select(0, idx)
+                tgt_s = target_denorm.index_select(0, idx)
+                mm = metric_mask.index_select(0, idx) if metric_mask is not None else None
+                logs[f"stage2/metric_mae/{dom}"] = _scalar_masked_mean(
+                    (pred_s - tgt_s).abs(), mm
+                ).detach()
+                logs[f"stage2/metric_rmse/{dom}"] = torch.sqrt(
+                    _scalar_masked_mean((pred_s - tgt_s).pow(2), mm).clamp_min(1e-12)
+                ).detach()
+                logs[f"stage2/metric_mape/{dom}"] = _scalar_masked_mean(
+                    (pred_s - tgt_s).abs() / (tgt_s.abs() + 1e-6),
+                    mm,
                 ).detach()
                 if gw is not None:
                     logs[f"stage2/fusion_gate/{dom}"] = gw.index_select(0, idx).mean().detach()

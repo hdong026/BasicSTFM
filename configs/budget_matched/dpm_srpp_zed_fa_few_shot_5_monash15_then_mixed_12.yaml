@@ -1,15 +1,16 @@
-# DPM_SRPP_ZED — full pipeline in one work_dir: pretrain → traffic zero-shot evals → 5%%/10%% few-shot.
-# Few-shot mechanism default load_from: srd_xd_joint (same run). Set env ZED_ZERO_SHOT_CKPT only for an external .pt.
-# Calibration: router + fusion gate + router feat adapter + zed_fewshot_adapter (see model.few_shot).
+# ZED-FA (Factorized Adaptation): few-shot target prompt + spatial adapter + affine calib.
+# Load ZS/joint weights via stage load_from / ZED_ZERO_SHOT_CKPT; FA modules init fresh.
+# Effective freeze: stable_trunk, source experts (adapters+shared diffusion), event encoder
+# stay frozen (freeze: [all] minus FA/router/gate/router_feat_adapter/fewshot_adapter).
 
-experiment_name: dpm_srpp_zed_few_shot_monash15_then_mixed_12
+experiment_name: dpm_srpp_zed_fa_fs5
 experiment:
   protocol: few_shot
 seed: 42
 trainer:
   type: MultiStageTrainer
   device: auto
-  work_dir: runs/dpm_srpp_zed_few_shot_monash15_then_mixed_12
+  work_dir: runs/dpm_srpp_zed_fa_fs5
   log_every: 50
 dataset_registry:
   LargeST_xd_part0:
@@ -176,7 +177,7 @@ data:
     type: standard
 model:
   type: SRDSTFMBackboneZED
-  name: DPM_SRPP_ZED
+  name: DPM_SRPP_ZED_FA
   num_nodes: auto
   input_dim: auto
   output_dim: auto
@@ -224,19 +225,36 @@ model:
     enable_fewshot_adapter: true
   few_shot:
     load_from_zero_shot: true
+    enable_factorized_adaptation: true
+    train_target_prompt: true
+    target_prompt_dim: 64
+    max_target_prompt_datasets: 64
+    target_spatial_adapter: true
+    spatial_adapter_bottleneck_ratio: 8
+    spatial_adapter_scale: 0.25
+    affine_calibration: true
+    calibration:
+      mode: node_channel
+      init_alpha: 1.0
+      init_beta: 0.0
+      node_channel_param_cap: 4096
+    router_offset: true
     adaptation_mode: router_gate_adapter
-    freeze_stable_trunk: true
-    freeze_source_experts: true
     train_router: true
     train_fusion_gate: true
+    train_router_feat_adapter: true
     train_target_adapter: true
     train_full_target_diffusion: false
     few_shot_mode: calibration
-    train_router_feat_adapter: true
     anchor_to_zero_shot: true
-    lambda_anchor: 0.1
-    lambda_gate: 0.01
-    few_shot_epochs: 3
+    zed_fa_loss: true
+    loss:
+      lambda_final: 1.0
+      lambda_residual: 0.1
+      lambda_anchor: 0.05
+      lambda_adapter_reg: 0.0001
+    lambda_gate: 0.0
+    few_shot_epochs: 5
     few_shot_lr: 0.0001
 pipeline:
   stages:
@@ -534,7 +552,7 @@ pipeline:
     - type: mae
     - type: rmse
   - name: metr_la_five_percent_mechanism_tuning
-    epochs: 3
+    epochs: 5
     reset_data: true
     data:
       type: WindowDataModule
@@ -559,6 +577,11 @@ pipeline:
     - zed_route_gate.*
     - zed_router_feat_adapter.*
     - zed_fewshot_adapter.*
+    - zed_fa_prompt_embed.*
+    - zed_fa_prompt_proj.*
+    - zed_fa_router_bias
+    - zed_fa_spatial_adapter.*
+    - zed_fa_affine.*
     task:
       type: StableResidualForecastingTaskV5
       log_stage2_per_domain: true
@@ -591,74 +614,12 @@ pipeline:
       weight_decay: 0.0001
     scheduler:
       type: CosineAnnealingLR
-      T_max: 3
+      T_max: 5
     validate_every: 1
     gradient_clip_val: 5.0
     save_best_by: val/metric/mae
     save_best: true
-  - name: metr_la_ten_percent_mechanism_tuning
-    epochs: 3
-    reset_data: true
-    data:
-      type: WindowDataModule
-      dataset_key: METR-LA
-      input_len: 12
-      output_len: 12
-      batch_size: 8
-      split:
-      - 0.6
-      - 0.2
-      - 0.2
-      scaler:
-        type: standard
-      split_mode: basicts
-    load_from: ${env:ZED_ZERO_SHOT_CKPT,srd_xd_joint}
-    strict_load: false
-    few_shot_ratio: 0.1
-    freeze:
-    - all
-    unfreeze:
-    - zed_router.*
-    - zed_route_gate.*
-    - zed_router_feat_adapter.*
-    - zed_fewshot_adapter.*
-    task:
-      type: StableResidualForecastingTaskV5
-      log_stage2_per_domain: true
-      dsd_routing_key: auto
-      phase: joint
-      model_mode: forecast
-      stable_target: lowfreq
-      final_weight: 1.0
-      stable_weight: 0.0
-      residual_weight: 0.1
-      spectral_weight: 0.0
-      cross_cov_weight: 0.0
-      use_revin: false
-      primary_supervision_space: denormalized
-      basicts_scale_logging: true
-      robust_stage1: false
-      robust_lambda: 0.0
-      log_zed_metrics: true
-    losses:
-    - type: mae
-      weight: 1.0
-    - type: mse
-      weight: 0.05
-    metrics:
-    - type: mae
-    - type: rmse
-    optimizer:
-      type: AdamW
-      lr: 0.0001
-      weight_decay: 0.0001
-    scheduler:
-      type: CosineAnnealingLR
-      T_max: 3
-    validate_every: 1
-    gradient_clip_val: 5.0
-    save_best_by: val/metric/mae
-    save_best: true
+    early_stop_patience: 2
   - name: pems03_zero_shot
     eval_only: true
     epochs: 0
@@ -694,7 +655,7 @@ pipeline:
     - type: mae
     - type: rmse
   - name: pems03_five_percent_mechanism_tuning
-    epochs: 3
+    epochs: 5
     reset_data: true
     data:
       type: WindowDataModule
@@ -719,6 +680,11 @@ pipeline:
     - zed_route_gate.*
     - zed_router_feat_adapter.*
     - zed_fewshot_adapter.*
+    - zed_fa_prompt_embed.*
+    - zed_fa_prompt_proj.*
+    - zed_fa_router_bias
+    - zed_fa_spatial_adapter.*
+    - zed_fa_affine.*
     task:
       type: StableResidualForecastingTaskV5
       log_stage2_per_domain: true
@@ -751,74 +717,12 @@ pipeline:
       weight_decay: 0.0001
     scheduler:
       type: CosineAnnealingLR
-      T_max: 3
+      T_max: 5
     validate_every: 1
     gradient_clip_val: 5.0
     save_best_by: val/metric/mae
     save_best: true
-  - name: pems03_ten_percent_mechanism_tuning
-    epochs: 3
-    reset_data: true
-    data:
-      type: WindowDataModule
-      dataset_key: PEMS03
-      input_len: 12
-      output_len: 12
-      batch_size: 8
-      split:
-      - 0.6
-      - 0.2
-      - 0.2
-      scaler:
-        type: standard
-      split_mode: basicts
-    load_from: ${env:ZED_ZERO_SHOT_CKPT,srd_xd_joint}
-    strict_load: false
-    few_shot_ratio: 0.1
-    freeze:
-    - all
-    unfreeze:
-    - zed_router.*
-    - zed_route_gate.*
-    - zed_router_feat_adapter.*
-    - zed_fewshot_adapter.*
-    task:
-      type: StableResidualForecastingTaskV5
-      log_stage2_per_domain: true
-      dsd_routing_key: auto
-      phase: joint
-      model_mode: forecast
-      stable_target: lowfreq
-      final_weight: 1.0
-      stable_weight: 0.0
-      residual_weight: 0.1
-      spectral_weight: 0.0
-      cross_cov_weight: 0.0
-      use_revin: false
-      primary_supervision_space: denormalized
-      basicts_scale_logging: true
-      robust_stage1: false
-      robust_lambda: 0.0
-      log_zed_metrics: true
-    losses:
-    - type: mae
-      weight: 1.0
-    - type: mse
-      weight: 0.05
-    metrics:
-    - type: mae
-    - type: rmse
-    optimizer:
-      type: AdamW
-      lr: 0.0001
-      weight_decay: 0.0001
-    scheduler:
-      type: CosineAnnealingLR
-      T_max: 3
-    validate_every: 1
-    gradient_clip_val: 5.0
-    save_best_by: val/metric/mae
-    save_best: true
+    early_stop_patience: 2
   - name: pems04_zero_shot
     eval_only: true
     epochs: 0
@@ -854,7 +758,7 @@ pipeline:
     - type: mae
     - type: rmse
   - name: pems04_five_percent_mechanism_tuning
-    epochs: 3
+    epochs: 5
     reset_data: true
     data:
       type: WindowDataModule
@@ -879,6 +783,11 @@ pipeline:
     - zed_route_gate.*
     - zed_router_feat_adapter.*
     - zed_fewshot_adapter.*
+    - zed_fa_prompt_embed.*
+    - zed_fa_prompt_proj.*
+    - zed_fa_router_bias
+    - zed_fa_spatial_adapter.*
+    - zed_fa_affine.*
     task:
       type: StableResidualForecastingTaskV5
       log_stage2_per_domain: true
@@ -911,74 +820,12 @@ pipeline:
       weight_decay: 0.0001
     scheduler:
       type: CosineAnnealingLR
-      T_max: 3
+      T_max: 5
     validate_every: 1
     gradient_clip_val: 5.0
     save_best_by: val/metric/mae
     save_best: true
-  - name: pems04_ten_percent_mechanism_tuning
-    epochs: 3
-    reset_data: true
-    data:
-      type: WindowDataModule
-      dataset_key: PEMS04
-      input_len: 12
-      output_len: 12
-      batch_size: 8
-      split:
-      - 0.6
-      - 0.2
-      - 0.2
-      scaler:
-        type: standard
-      split_mode: basicts
-    load_from: ${env:ZED_ZERO_SHOT_CKPT,srd_xd_joint}
-    strict_load: false
-    few_shot_ratio: 0.1
-    freeze:
-    - all
-    unfreeze:
-    - zed_router.*
-    - zed_route_gate.*
-    - zed_router_feat_adapter.*
-    - zed_fewshot_adapter.*
-    task:
-      type: StableResidualForecastingTaskV5
-      log_stage2_per_domain: true
-      dsd_routing_key: auto
-      phase: joint
-      model_mode: forecast
-      stable_target: lowfreq
-      final_weight: 1.0
-      stable_weight: 0.0
-      residual_weight: 0.1
-      spectral_weight: 0.0
-      cross_cov_weight: 0.0
-      use_revin: false
-      primary_supervision_space: denormalized
-      basicts_scale_logging: true
-      robust_stage1: false
-      robust_lambda: 0.0
-      log_zed_metrics: true
-    losses:
-    - type: mae
-      weight: 1.0
-    - type: mse
-      weight: 0.05
-    metrics:
-    - type: mae
-    - type: rmse
-    optimizer:
-      type: AdamW
-      lr: 0.0001
-      weight_decay: 0.0001
-    scheduler:
-      type: CosineAnnealingLR
-      T_max: 3
-    validate_every: 1
-    gradient_clip_val: 5.0
-    save_best_by: val/metric/mae
-    save_best: true
+    early_stop_patience: 2
   - name: pems07_zero_shot
     eval_only: true
     epochs: 0
@@ -1014,7 +861,7 @@ pipeline:
     - type: mae
     - type: rmse
   - name: pems07_five_percent_mechanism_tuning
-    epochs: 3
+    epochs: 5
     reset_data: true
     data:
       type: WindowDataModule
@@ -1039,6 +886,11 @@ pipeline:
     - zed_route_gate.*
     - zed_router_feat_adapter.*
     - zed_fewshot_adapter.*
+    - zed_fa_prompt_embed.*
+    - zed_fa_prompt_proj.*
+    - zed_fa_router_bias
+    - zed_fa_spatial_adapter.*
+    - zed_fa_affine.*
     task:
       type: StableResidualForecastingTaskV5
       log_stage2_per_domain: true
@@ -1071,74 +923,12 @@ pipeline:
       weight_decay: 0.0001
     scheduler:
       type: CosineAnnealingLR
-      T_max: 3
+      T_max: 5
     validate_every: 1
     gradient_clip_val: 5.0
     save_best_by: val/metric/mae
     save_best: true
-  - name: pems07_ten_percent_mechanism_tuning
-    epochs: 3
-    reset_data: true
-    data:
-      type: WindowDataModule
-      dataset_key: PEMS07
-      input_len: 12
-      output_len: 12
-      batch_size: 8
-      split:
-      - 0.6
-      - 0.2
-      - 0.2
-      scaler:
-        type: standard
-      split_mode: basicts
-    load_from: ${env:ZED_ZERO_SHOT_CKPT,srd_xd_joint}
-    strict_load: false
-    few_shot_ratio: 0.1
-    freeze:
-    - all
-    unfreeze:
-    - zed_router.*
-    - zed_route_gate.*
-    - zed_router_feat_adapter.*
-    - zed_fewshot_adapter.*
-    task:
-      type: StableResidualForecastingTaskV5
-      log_stage2_per_domain: true
-      dsd_routing_key: auto
-      phase: joint
-      model_mode: forecast
-      stable_target: lowfreq
-      final_weight: 1.0
-      stable_weight: 0.0
-      residual_weight: 0.1
-      spectral_weight: 0.0
-      cross_cov_weight: 0.0
-      use_revin: false
-      primary_supervision_space: denormalized
-      basicts_scale_logging: true
-      robust_stage1: false
-      robust_lambda: 0.0
-      log_zed_metrics: true
-    losses:
-    - type: mae
-      weight: 1.0
-    - type: mse
-      weight: 0.05
-    metrics:
-    - type: mae
-    - type: rmse
-    optimizer:
-      type: AdamW
-      lr: 0.0001
-      weight_decay: 0.0001
-    scheduler:
-      type: CosineAnnealingLR
-      T_max: 3
-    validate_every: 1
-    gradient_clip_val: 5.0
-    save_best_by: val/metric/mae
-    save_best: true
+    early_stop_patience: 2
   - name: pems08_zero_shot
     eval_only: true
     epochs: 0
@@ -1174,7 +964,7 @@ pipeline:
     - type: mae
     - type: rmse
   - name: pems08_five_percent_mechanism_tuning
-    epochs: 3
+    epochs: 5
     reset_data: true
     data:
       type: WindowDataModule
@@ -1199,6 +989,11 @@ pipeline:
     - zed_route_gate.*
     - zed_router_feat_adapter.*
     - zed_fewshot_adapter.*
+    - zed_fa_prompt_embed.*
+    - zed_fa_prompt_proj.*
+    - zed_fa_router_bias
+    - zed_fa_spatial_adapter.*
+    - zed_fa_affine.*
     task:
       type: StableResidualForecastingTaskV5
       log_stage2_per_domain: true
@@ -1231,74 +1026,12 @@ pipeline:
       weight_decay: 0.0001
     scheduler:
       type: CosineAnnealingLR
-      T_max: 3
+      T_max: 5
     validate_every: 1
     gradient_clip_val: 5.0
     save_best_by: val/metric/mae
     save_best: true
-  - name: pems08_ten_percent_mechanism_tuning
-    epochs: 3
-    reset_data: true
-    data:
-      type: WindowDataModule
-      dataset_key: PEMS08
-      input_len: 12
-      output_len: 12
-      batch_size: 8
-      split:
-      - 0.6
-      - 0.2
-      - 0.2
-      scaler:
-        type: standard
-      split_mode: basicts
-    load_from: ${env:ZED_ZERO_SHOT_CKPT,srd_xd_joint}
-    strict_load: false
-    few_shot_ratio: 0.1
-    freeze:
-    - all
-    unfreeze:
-    - zed_router.*
-    - zed_route_gate.*
-    - zed_router_feat_adapter.*
-    - zed_fewshot_adapter.*
-    task:
-      type: StableResidualForecastingTaskV5
-      log_stage2_per_domain: true
-      dsd_routing_key: auto
-      phase: joint
-      model_mode: forecast
-      stable_target: lowfreq
-      final_weight: 1.0
-      stable_weight: 0.0
-      residual_weight: 0.1
-      spectral_weight: 0.0
-      cross_cov_weight: 0.0
-      use_revin: false
-      primary_supervision_space: denormalized
-      basicts_scale_logging: true
-      robust_stage1: false
-      robust_lambda: 0.0
-      log_zed_metrics: true
-    losses:
-    - type: mae
-      weight: 1.0
-    - type: mse
-      weight: 0.05
-    metrics:
-    - type: mae
-    - type: rmse
-    optimizer:
-      type: AdamW
-      lr: 0.0001
-      weight_decay: 0.0001
-    scheduler:
-      type: CosineAnnealingLR
-      T_max: 3
-    validate_every: 1
-    gradient_clip_val: 5.0
-    save_best_by: val/metric/mae
-    save_best: true
+    early_stop_patience: 2
   - name: pems_bay_zero_shot
     eval_only: true
     epochs: 0
@@ -1334,7 +1067,7 @@ pipeline:
     - type: mae
     - type: rmse
   - name: pems_bay_five_percent_mechanism_tuning
-    epochs: 3
+    epochs: 5
     reset_data: true
     data:
       type: WindowDataModule
@@ -1359,6 +1092,11 @@ pipeline:
     - zed_route_gate.*
     - zed_router_feat_adapter.*
     - zed_fewshot_adapter.*
+    - zed_fa_prompt_embed.*
+    - zed_fa_prompt_proj.*
+    - zed_fa_router_bias
+    - zed_fa_spatial_adapter.*
+    - zed_fa_affine.*
     task:
       type: StableResidualForecastingTaskV5
       log_stage2_per_domain: true
@@ -1391,71 +1129,9 @@ pipeline:
       weight_decay: 0.0001
     scheduler:
       type: CosineAnnealingLR
-      T_max: 3
+      T_max: 5
     validate_every: 1
     gradient_clip_val: 5.0
     save_best_by: val/metric/mae
     save_best: true
-  - name: pems_bay_ten_percent_mechanism_tuning
-    epochs: 3
-    reset_data: true
-    data:
-      type: WindowDataModule
-      dataset_key: PEMS-BAY
-      input_len: 12
-      output_len: 12
-      batch_size: 8
-      split:
-      - 0.6
-      - 0.2
-      - 0.2
-      scaler:
-        type: standard
-      split_mode: basicts
-    load_from: ${env:ZED_ZERO_SHOT_CKPT,srd_xd_joint}
-    strict_load: false
-    few_shot_ratio: 0.1
-    freeze:
-    - all
-    unfreeze:
-    - zed_router.*
-    - zed_route_gate.*
-    - zed_router_feat_adapter.*
-    - zed_fewshot_adapter.*
-    task:
-      type: StableResidualForecastingTaskV5
-      log_stage2_per_domain: true
-      dsd_routing_key: auto
-      phase: joint
-      model_mode: forecast
-      stable_target: lowfreq
-      final_weight: 1.0
-      stable_weight: 0.0
-      residual_weight: 0.1
-      spectral_weight: 0.0
-      cross_cov_weight: 0.0
-      use_revin: false
-      primary_supervision_space: denormalized
-      basicts_scale_logging: true
-      robust_stage1: false
-      robust_lambda: 0.0
-      log_zed_metrics: true
-    losses:
-    - type: mae
-      weight: 1.0
-    - type: mse
-      weight: 0.05
-    metrics:
-    - type: mae
-    - type: rmse
-    optimizer:
-      type: AdamW
-      lr: 0.0001
-      weight_decay: 0.0001
-    scheduler:
-      type: CosineAnnealingLR
-      T_max: 3
-    validate_every: 1
-    gradient_clip_val: 5.0
-    save_best_by: val/metric/mae
-    save_best: true
+    early_stop_patience: 2

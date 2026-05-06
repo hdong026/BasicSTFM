@@ -109,6 +109,7 @@ class MultiStageTrainer:
             seed_everything(int(self.cfg.get("seed", 42)))
             self.logger.info("Stage plan:\n%s", json.dumps(self.plan.describe(), indent=2))
             if self.dry_run:
+                self._dry_run_few_shot_summaries()
                 self.logger.info("Dry run complete. No model or data objects were built.")
                 return
 
@@ -154,7 +155,7 @@ class MultiStageTrainer:
             suffix,
         )
         self._apply_trainability(stage)
-        task = TASKS.build(stage.task)
+        task = TASKS.build(self._build_task_config(stage, stage_index))
         proto = getattr(task, "scale_protocol", None)
         if proto:
             self.logger.info("scale_protocol=%s", proto)
@@ -175,12 +176,16 @@ class MultiStageTrainer:
         scheduler = None if optimizer is None else build_scheduler(stage.scheduler, optimizer)
         start_epoch = 1
         best_score = float("inf")
+        epochs_no_improve = 0
+        es_patience = getattr(stage, "early_stop_patience", None)
         resumed_this_stage = False
         train_logs: Optional[Dict[str, float]] = None
         val_logs: Optional[Dict[str, float]] = None
 
+        loaded_ckpt_for_fewshot: Optional[str] = None
         if self._should_resume_stage(stage, stage_index):
             ckpt_path = str(self._resume_checkpoint)
+            loaded_ckpt_for_fewshot = ckpt_path
             info = self._load_stage_weights(
                 ckpt_path,
                 stage=stage,
@@ -206,6 +211,7 @@ class MultiStageTrainer:
 
         if stage.load_from and not resumed_this_stage:
             ckpt_path = self._resolve_checkpoint_reference(stage.load_from)
+            loaded_ckpt_for_fewshot = ckpt_path
             info = self._load_stage_weights(
                 ckpt_path,
                 stage=stage,
@@ -219,6 +225,8 @@ class MultiStageTrainer:
                 info["missing_keys"],
                 info["unexpected_keys"],
             )
+
+        self._maybe_log_few_shot_stage_audit(stage, stage_index, loaded_ckpt_for_fewshot)
 
         if stage.eval_only:
             val_logs = self._run_eval_loaders(
@@ -311,7 +319,8 @@ class MultiStageTrainer:
                     )
                 )
                 score_for_scheduler = score
-                if score < best_score:
+                improved = score < best_score
+                if improved:
                     best_score = score
                     best_path = self.work_dir / "checkpoints" / f"{stage.name}_best.pt"
                     if stage.save_best:
@@ -327,6 +336,19 @@ class MultiStageTrainer:
                             best_score=best_score,
                             tag="best",
                         )
+                if es_patience is not None and es_patience > 0:
+                    if improved:
+                        epochs_no_improve = 0
+                    else:
+                        epochs_no_improve += 1
+                    if epochs_no_improve >= es_patience:
+                        self.logger.info(
+                            "Early stopping stage %s: %d validation(s) without improvement (patience=%d)",
+                            stage.name,
+                            epochs_no_improve,
+                            es_patience,
+                        )
+                        break
 
             if scheduler is not None:
                 if scheduler.__class__.__name__ == "ReduceLROnPlateau":
@@ -800,6 +822,100 @@ class MultiStageTrainer:
         trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
         total = sum(p.numel() for p in model.parameters())
         self.logger.info("Trainable parameters after stage rules: %d / %d", trainable, total)
+
+    def _build_task_config(self, stage: StageSpec, stage_index: int) -> Dict[str, Any]:
+        task_cfg = deepcopy(stage.task)
+        fs = self._stage_model_recipes[stage_index].get("few_shot")
+        if isinstance(fs, dict):
+            if "anchor_to_zero_shot" in fs:
+                task_cfg["anchor_to_zero_shot"] = bool(fs["anchor_to_zero_shot"])
+            if "lambda_anchor" in fs:
+                task_cfg["lambda_anchor"] = float(fs["lambda_anchor"])
+            if "lambda_gate" in fs:
+                task_cfg["lambda_gate"] = float(fs["lambda_gate"])
+            if "zed_fa_loss" in fs:
+                task_cfg["zed_fa_loss"] = bool(fs["zed_fa_loss"])
+            loss_blk = fs.get("loss")
+            if isinstance(loss_blk, dict):
+                if "lambda_final" in loss_blk:
+                    task_cfg["lambda_fa_final"] = float(loss_blk["lambda_final"])
+                if "lambda_residual" in loss_blk:
+                    task_cfg["lambda_fa_residual"] = float(loss_blk["lambda_residual"])
+                if "lambda_anchor" in loss_blk:
+                    task_cfg["lambda_anchor"] = float(loss_blk["lambda_anchor"])
+                if "lambda_adapter_reg" in loss_blk:
+                    task_cfg["lambda_adapter_reg"] = float(loss_blk["lambda_adapter_reg"])
+        if stage.few_shot_ratio is not None:
+            task_cfg["few_shot_calibration_stage"] = True
+        return task_cfg
+
+    def _maybe_log_few_shot_stage_audit(
+        self,
+        stage: StageSpec,
+        stage_index: int,
+        loaded_checkpoint: Optional[str],
+    ) -> None:
+        fs = self._stage_model_recipes[stage_index].get("few_shot")
+        if stage.few_shot_ratio is None:
+            return
+        model = unwrap_model(self.model) if self.model is not None else None
+        trainable_names = []
+        frozen_names = []
+        if model is not None:
+            for name, param in model.named_parameters():
+                if param.requires_grad:
+                    trainable_names.append(name)
+                else:
+                    frozen_names.append(name)
+        task_preview = self._build_task_config(stage, stage_index)
+        lines = [
+            "[few-shot stage audit]",
+            f"  stage={stage.name}",
+            f"  few_shot_ratio={stage.few_shot_ratio}",
+            f"  loaded_checkpoint={loaded_checkpoint}",
+            f"  anchor_to_zero_shot={bool(task_preview.get('anchor_to_zero_shot'))}",
+            f"  lambda_anchor={task_preview.get('lambda_anchor', '<?>')}",
+            f"  lambda_gate={task_preview.get('lambda_gate', '<?>')}",
+            f"  freeze={stage.freeze}",
+            f"  unfreeze={stage.unfreeze}",
+        ]
+        if isinstance(fs, dict) and fs.get("load_from_zero_shot"):
+            lines.append("  model.few_shot.load_from_zero_shot=true (weights from stage load_from / ZS ckpt)")
+        if trainable_names:
+            lines.append(f"  trainable_params ({len(trainable_names)}):")
+            lines.extend(f"    - {n}" for n in trainable_names[:200])
+            if len(trainable_names) > 200:
+                lines.append(f"    ... ({len(trainable_names) - 200} more)")
+        if frozen_names:
+            lines.append(f"  frozen_params ({len(frozen_names)}); sample:")
+            lines.extend(f"    - {n}" for n in frozen_names[:40])
+            if len(frozen_names) > 40:
+                lines.append(f"    ... ({len(frozen_names) - 40} more)")
+        self.logger.info("\n".join(lines))
+
+    def _dry_run_few_shot_summaries(self) -> None:
+        for idx, st in enumerate(self.plan.stages):
+            fs = self._stage_model_recipes[idx].get("few_shot")
+            if st.few_shot_ratio is None:
+                continue
+            lines = [
+                "[few-shot dry-run summary]",
+                f"  stage={st.name}",
+                f"  few_shot_ratio={st.few_shot_ratio}",
+                f"  freeze={st.freeze}",
+                f"  unfreeze={st.unfreeze}",
+            ]
+            if st.load_from:
+                try:
+                    resolved = self._resolve_checkpoint_reference(st.load_from)
+                except Exception as exc:
+                    resolved = f"<unresolved {st.load_from!r}: {exc!r}>"
+                lines.append(f"  load_from (resolved)={resolved}")
+            if isinstance(fs, dict):
+                lines.append(f"  model.few_shot={json.dumps(fs, sort_keys=True)}")
+            preview = self._build_task_config(st, idx)
+            lines.append(f"  anchor_to_zero_shot={bool(preview.get('anchor_to_zero_shot'))}")
+            self.logger.info("\n".join(lines))
 
     def _resolve_checkpoint_reference(self, reference: str) -> str:
         if reference == "previous":

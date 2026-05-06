@@ -31,6 +31,9 @@ class _SoftmaxRouterMLP(nn.Module):
 
     def forward(self, feat: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         logits = self.net(feat)
+        return self._logits_to_weights(logits)
+
+    def _logits_to_weights(self, logits: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         if self.top_k > 0 and self.top_k < logits.shape[-1]:
             topv, _ = logits.topk(self.top_k, dim=-1)
             thresh = topv[..., -1, None]
@@ -70,6 +73,71 @@ class _EventAdapter(nn.Module):
         return self.net(z)
 
 
+class _ZEDSpatialDeltaAdapter(nn.Module):
+    """Bottleneck residual adapter on fused delta ``[B, T, N, C]`` (FactoST-style spatial/temporal calibration)."""
+
+    def __init__(self, channels: int, bottleneck_ratio: int = 8) -> None:
+        super().__init__()
+        c = int(channels)
+        r = max(2, int(bottleneck_ratio))
+        b = max(4, c // r)
+        self.norm = nn.LayerNorm(c)
+        self.down = nn.Linear(c, b)
+        self.up = nn.Linear(b, c)
+        nn.init.zeros_(self.up.weight)
+        nn.init.zeros_(self.up.bias)
+
+    def forward(self, h: torch.Tensor) -> torch.Tensor:
+        shape = h.shape
+        x = h.reshape(-1, shape[-1])
+        x = self.norm(x)
+        x = self.up(F.gelu(self.down(x)))
+        return x.view(*shape)
+
+
+class _ZEDAffineCalib(nn.Module):
+    """Affine calibration ``y <- alpha * y + beta`` on final forecast (lightweight target adaptation)."""
+
+    def __init__(
+        self,
+        mode: str,
+        num_nodes: int,
+        channels: int,
+        init_alpha: float = 1.0,
+        init_beta: float = 0.0,
+        node_channel_param_cap: int = 4096,
+    ) -> None:
+        super().__init__()
+        mode = str(mode).lower().strip()
+        c = int(channels)
+        n = int(num_nodes)
+        if mode not in {"scalar", "channel", "node_channel"}:
+            raise ValueError("calibration.mode must be scalar|channel|node_channel")
+        if mode == "node_channel" and n * c > int(node_channel_param_cap):
+            mode = "channel"
+        self.mode = mode
+        if mode == "scalar":
+            self.alpha = nn.Parameter(torch.tensor(float(init_alpha)))
+            self.beta = nn.Parameter(torch.tensor(float(init_beta)))
+        elif mode == "channel":
+            self.alpha = nn.Parameter(torch.full((c,), float(init_alpha)))
+            self.beta = nn.Parameter(torch.full((c,), float(init_beta)))
+        else:
+            self.alpha = nn.Parameter(torch.full((n, c), float(init_alpha)))
+            self.beta = nn.Parameter(torch.full((n, c), float(init_beta)))
+
+    def forward(self, y: torch.Tensor) -> torch.Tensor:
+        if self.mode == "scalar":
+            return y * self.alpha + self.beta
+        if self.mode == "channel":
+            a = self.alpha.view(1, 1, 1, -1)
+            b = self.beta.view(1, 1, 1, -1)
+            return y * a + b
+        a = self.alpha.view(1, 1, *self.alpha.shape)
+        b = self.beta.view(1, 1, *self.beta.shape)
+        return y * a + b
+
+
 def _blend_weighted_dicts(
     dicts: List[Dict[str, torch.Tensor]],
     weights: torch.Tensor,
@@ -103,8 +171,15 @@ def _blend_weighted_dicts(
 class SRDSTFMBackboneZED(SRDSTFMBackbone):
     """MoE residual diffusion: experts trained on source domains; router mixes at inference."""
 
-    def __init__(self, *args: Any, stage2: Optional[Dict[str, Any]] = None, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *args: Any,
+        stage2: Optional[Dict[str, Any]] = None,
+        few_shot: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> None:
         kwargs.pop("stage1", None)  # optional YAML documentation; loading uses trainer stages
+        self._few_shot_cfg: Dict[str, Any] = dict(few_shot or {})
         uig = bool(kwargs.get("use_inertia_gate", True))
         uat = bool(kwargs.get("use_attenuation_gate", True))
         super().__init__(*args, **kwargs)
@@ -206,12 +281,71 @@ class SRDSTFMBackboneZED(SRDSTFMBackbone):
 
         self._routing_key_cfg = str(self._stage2.get("routing_key", "auto")).lower()
 
+        adapt_mode = str(self._few_shot_cfg.get("adaptation_mode", "router_gate_adapter")).lower()
+        use_rfa = bool(self._few_shot_cfg.get("train_router_feat_adapter", True))
+        if adapt_mode != "router_gate_adapter":
+            use_rfa = bool(self._few_shot_cfg.get("train_router_feat_adapter", False))
+        rfa_bottleneck = int(self._few_shot_cfg.get("router_feat_bottleneck", bottleneck))
+        self.zed_router_feat_adapter: Optional[_EventAdapter] = None
+        self._router_feat_adapter_scale = float(self._few_shot_cfg.get("router_feat_adapter_scale", 0.25))
+        if self._few_shot_cfg and use_rfa:
+            self.zed_router_feat_adapter = _EventAdapter(feat_dim, rfa_bottleneck)
+
         self.zed_fewshot_adapter: Optional[_EventAdapter] = None
         self._fewshot_scale = float(self._stage2.get("fewshot_adapter_scale", 0.25))
         if bool(self._stage2.get("enable_fewshot_adapter", False)):
-            self.zed_fewshot_adapter = _EventAdapter(self.hidden_dim, bottleneck)
+            train_tgt_ad = (
+                bool(self._few_shot_cfg.get("train_target_adapter", True))
+                if self._few_shot_cfg
+                else True
+            )
+            if train_tgt_ad:
+                self.zed_fewshot_adapter = _EventAdapter(self.hidden_dim, bottleneck)
 
         self._max_dataset_embed = int(self._stage2.get("max_dataset_embed", 64))
+
+        # --- Factorized adaptation (ZED-FA): lightweight target-only modules (few-shot). ---
+        self._zed_fa_enabled = False
+        self.zed_fa_prompt_embed: Optional[nn.Embedding] = None
+        self.zed_fa_prompt_proj: Optional[nn.Linear] = None
+        self.zed_fa_router_bias: Optional[nn.Parameter] = None
+        self.zed_fa_spatial_adapter: Optional[_ZEDSpatialDeltaAdapter] = None
+        self._zed_fa_spatial_scale = float(self._few_shot_cfg.get("spatial_adapter_scale", 0.25))
+        self.zed_fa_affine: Optional[_ZEDAffineCalib] = None
+
+        fa_on = bool(self._few_shot_cfg.get("enable_factorized_adaptation", False))
+        if fa_on and self._few_shot_cfg:
+            self._zed_fa_enabled = True
+            if bool(self._few_shot_cfg.get("train_target_prompt", True)):
+                p_dim = max(8, int(self._few_shot_cfg.get("target_prompt_dim", 64)))
+                n_ds = max(
+                    int(self._few_shot_cfg.get("max_target_prompt_datasets", self._max_dataset_embed)),
+                    1,
+                )
+                self.zed_fa_prompt_embed = nn.Embedding(n_ds, p_dim)
+                self.zed_fa_prompt_proj = nn.Linear(p_dim, feat_dim)
+                nn.init.normal_(self.zed_fa_prompt_embed.weight, std=0.02)
+                nn.init.zeros_(self.zed_fa_prompt_proj.bias)
+
+            if bool(self._few_shot_cfg.get("router_offset", True)):
+                self.zed_fa_router_bias = nn.Parameter(torch.zeros(self.num_experts))
+
+            if bool(self._few_shot_cfg.get("target_spatial_adapter", True)):
+                ratio = int(self._few_shot_cfg.get("spatial_adapter_bottleneck_ratio", 8))
+                self.zed_fa_spatial_adapter = _ZEDSpatialDeltaAdapter(self.output_dim, bottleneck_ratio=ratio)
+
+            if bool(self._few_shot_cfg.get("affine_calibration", True)):
+                cal = self._few_shot_cfg.get("calibration") or {}
+                mode = str(cal.get("mode", "node_channel"))
+                cap = int(cal.get("node_channel_param_cap", 4096))
+                self.zed_fa_affine = _ZEDAffineCalib(
+                    mode,
+                    int(getattr(self, "num_nodes", 1) or 1),
+                    int(self.output_dim),
+                    init_alpha=float(cal.get("init_alpha", 1.0)),
+                    init_beta=float(cal.get("init_beta", 0.0)),
+                    node_channel_param_cap=cap,
+                )
 
     def prepare_zed_router_aux(self, batch: Dict[str, Any]) -> Dict[str, Any]:
         if "dataset_id_embed" not in {s.lower().strip() for s in self._router_inputs}:
@@ -220,6 +354,48 @@ class SRDSTFMBackboneZED(SRDSTFMBackbone):
         if isinstance(idx, torch.Tensor) and idx.ndim == 1:
             return {"router_dataset_index": idx}
         return {}
+
+    def zed_fa_enabled(self) -> bool:
+        return bool(getattr(self, "_zed_fa_enabled", False))
+
+    def zed_fa_adapter_l2_penalty(self) -> torch.Tensor:
+        dev = next(self.parameters()).device
+        dt = next(self.parameters()).dtype
+        reg = torch.zeros((), device=dev, dtype=dt)
+        modules: List[Optional[nn.Module]] = [
+            self.zed_fa_spatial_adapter,
+            self.zed_fa_prompt_proj,
+        ]
+        if self.zed_fa_prompt_embed is not None:
+            reg = reg + self.zed_fa_prompt_embed.weight.pow(2).sum()
+        for m in modules:
+            if m is None:
+                continue
+            for p in m.parameters():
+                reg = reg + p.pow(2).sum()
+        if self.zed_fa_router_bias is not None:
+            reg = reg + self.zed_fa_router_bias.pow(2).sum()
+        if self.zed_fa_affine is not None:
+            reg = reg + self.zed_fa_affine.alpha.pow(2).sum() + self.zed_fa_affine.beta.pow(2).sum()
+        return reg
+
+    def zed_fa_logging_scalars(self, ref: torch.Tensor) -> Dict[str, torch.Tensor]:
+        out: Dict[str, torch.Tensor] = {}
+        if self.zed_fa_prompt_embed is not None:
+            out["zed_fa/prompt_weight_norm"] = self.zed_fa_prompt_embed.weight.detach().norm()
+        if self.zed_fa_spatial_adapter is not None:
+            s = ref.new_tensor(0.0)
+            for p in self.zed_fa_spatial_adapter.parameters():
+                s = s + p.detach().pow(2).sum()
+            out["zed_fa/spatial_adapter_norm"] = s.sqrt()
+        if self.zed_fa_affine is not None:
+            a = self.zed_fa_affine.alpha.detach()
+            b = self.zed_fa_affine.beta.detach()
+            out["zed_fa/calib_alpha_mean"] = a.mean()
+            out["zed_fa/calib_alpha_std"] = a.std(unbiased=False)
+            out["zed_fa/calib_beta_mean"] = b.mean()
+            out["zed_fa/calib_beta_std"] = b.std(unbiased=False)
+        return out
 
     def _run_single_expert(
         self,
@@ -257,6 +433,7 @@ class SRDSTFMBackboneZED(SRDSTFMBackbone):
         target: Optional[torch.Tensor] = None,
         routing: Optional[Dict[str, Any]] = None,
         router_dataset_index: Optional[torch.Tensor] = None,
+        zed_disable_fa: bool = False,
     ) -> Dict[str, torch.Tensor]:
         _ = routing  # unused
         x, padded_mask, original_channels = self._pad_input(x, mask)
@@ -304,12 +481,31 @@ class SRDSTFMBackboneZED(SRDSTFMBackbone):
             max_dataset_embed=self._max_dataset_embed,
         )
 
-        expert_w, expert_logits = self.zed_router(route_feat)
+        if (
+            self.zed_fa_prompt_embed is not None
+            and self.zed_fa_prompt_proj is not None
+            and not zed_disable_fa
+        ):
+            prm_idx = router_dataset_index if router_dataset_index is not None else dataset_index
+            if isinstance(prm_idx, torch.Tensor) and prm_idx.ndim == 1:
+                pid = prm_idx.long().clamp(0, self.zed_fa_prompt_embed.num_embeddings - 1)
+                route_feat = route_feat + self.zed_fa_prompt_proj(self.zed_fa_prompt_embed(pid))
+
+        route_to_router = route_feat
+        if self.zed_router_feat_adapter is not None:
+            route_to_router = route_feat + self._router_feat_adapter_scale * self.zed_router_feat_adapter(
+                route_feat
+            )
+
+        logits_r = self.zed_router.net(route_to_router)
+        if self.zed_fa_router_bias is not None and not zed_disable_fa:
+            logits_r = logits_r + self.zed_fa_router_bias
+        expert_w, expert_logits = self.zed_router._logits_to_weights(logits_r)
         entropy = -(expert_w * (expert_w.clamp_min(1e-9).log())).sum(dim=-1)
         top1 = expert_w.argmax(dim=-1)
 
         if self.zed_route_gate is not None:
-            gate = self.zed_route_gate(route_feat)
+            gate = self.zed_route_gate(route_to_router)
         else:
             gate = x.new_ones(x.shape[0])
 
@@ -393,10 +589,18 @@ class SRDSTFMBackboneZED(SRDSTFMBackbone):
             fusion_weight = fused["fusion_weight"]
             fused_mode = fused["fusion_mode"]
 
+        if self.zed_fa_spatial_adapter is not None and not zed_disable_fa:
+            combined_delta = combined_delta + self._zed_fa_spatial_scale * self.zed_fa_spatial_adapter(
+                combined_delta
+            )
+
         if self.use_persistence_anchor and persistence is not None:
             forecast = persistence + self.calibration_head(combined_delta)
         else:
             forecast = self.calibration_head(combined_delta)
+
+        if self.zed_fa_affine is not None and not zed_disable_fa:
+            forecast = self.zed_fa_affine(forecast)
 
         if original_channels < self.output_dim:
             forecast = forecast[..., :original_channels]

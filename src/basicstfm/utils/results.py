@@ -116,6 +116,23 @@ def summarize_stage_rows(
     return summary
 
 
+def row_effective_train_fraction(row: Mapping[str, Any]) -> Optional[float]:
+    """Best-effort few-shot fraction for filtering paper summaries (YAML + legacy rows)."""
+
+    tf = row.get("train_fraction")
+    if tf not in (None, "", 0, 0.0):
+        try:
+            return float(tf)
+        except (TypeError, ValueError):
+            pass
+    st = str(row.get("stage_name") or "").lower()
+    if "_five_percent_" in st or "five_percent" in st:
+        return 0.05
+    if "_ten_percent_" in st or "ten_percent" in st:
+        return 0.1
+    return None
+
+
 def infer_stage_regime(row: Mapping[str, Any]) -> str:
     stage_name = str(row.get("stage_name") or "").lower()
     train_fraction = row.get("train_fraction")
@@ -174,10 +191,38 @@ def pretty_model_name(row: Mapping[str, Any]) -> str:
         return "UrbanDiT-lite"
     if experiment_name_raw == "st_mambasync_monash15_then_mixed_12_basicts_budget":
         return "ST-MambaSync"
-    if experiment_name_raw == "dpm_srpp_zed_zero_shot_monash15_then_mixed_12":
+    if experiment_name_raw.startswith("dpm_srpp_zed_zero_shot_monash15_then_mixed_12"):
         return "DPM-SR++-ZED-ZS"
-    if experiment_name_raw == "dpm_srpp_zed_few_shot_monash15_then_mixed_12":
-        return "DPM-SR++-ZED-FS"
+    # Combined few-shot YAML: target zero-shot eval vs mechanism tuning must split labels, otherwise
+    # ``build_paper_summary`` cannot fill both ZS and FS columns from one ``stage_results.json``.
+    if experiment_name_raw.startswith("dpm_srpp_zed_few_shot_monash15_then_mixed_12"):
+        st = str(row.get("stage_name") or "").lower()
+        if (
+            "mechanism_tuning" in st
+            or "_five_percent_" in st
+            or "_ten_percent_" in st
+        ):
+            return "DPM-SR++-ZED-FS"
+        return "DPM-SR++-ZED-ZS"
+    if experiment_name_raw.startswith("dpm_srpp_zed_fa_few_shot_monash15_then_mixed_12"):
+        st = str(row.get("stage_name") or "").lower()
+        if (
+            "mechanism_tuning" in st
+            or "_five_percent_" in st
+            or "_ten_percent_" in st
+        ):
+            return "DPM-SR++-ZED-FA-FS"
+        return "DPM-SR++-ZED-FA-ZS"
+    if experiment_name_raw.startswith("dpm_srpp_zed_fa_fs5"):
+        st = str(row.get("stage_name") or "").lower()
+        if "mechanism_tuning" in st or "_five_percent_" in st:
+            return "DPM-SR++-ZED-FA-FS"
+        return "DPM-SR++-ZED-FA-ZS"
+    if experiment_name_raw.startswith("dpm_srpp_zed_fa_fs10"):
+        st = str(row.get("stage_name") or "").lower()
+        if "mechanism_tuning" in st or "_ten_percent_" in st:
+            return "DPM-SR++-ZED-FA-FS"
+        return "DPM-SR++-ZED-FA-ZS"
     if experiment_name_raw == "dpm_srpp_dsd_zero_shot_monash15_then_mixed_12":
         return "DPM-SR++-DSD-ZS"
     if experiment_name_raw == "dpm_srpp_dsd_few_shot_monash15_then_mixed_12":
@@ -276,6 +321,17 @@ def pretty_model_name(row: Mapping[str, Any]) -> str:
     return model_type or "Unknown"
 
 
+def transfer_table_model_name(row: Mapping[str, Any]) -> str:
+    """Display name for paper / benchmark tables; merges split ZED protocol rows into one series."""
+
+    name = pretty_model_name(row)
+    if name in ("DPM-SR++-ZED-ZS", "DPM-SR++-ZED-FS"):
+        return "DPM-SR++-ZED"
+    if name in ("DPM-SR++-ZED-FA-ZS", "DPM-SR++-ZED-FA-FS"):
+        return "DPM-SR++-ZED-FA"
+    return name
+
+
 def build_paper_summary(
     rows: Sequence[Dict[str, Any]],
     *,
@@ -283,9 +339,38 @@ def build_paper_summary(
     metric: str = "metric/mae",
     datasets: Optional[Sequence[str]] = None,
     model_order: Optional[Sequence[str]] = None,
+    few_shot_fractions: Sequence[float] = (0.05, 0.1),
 ) -> Tuple[List[str], List[Dict[str, Any]]]:
+    """Aggregate zero-shot + one or more few-shot fractions into table rows.
+
+    When a single fraction is requested, column names stay ``{dataset} FS`` / ``Gain`` for compatibility.
+    With multiple fractions, columns are ``{dataset} FS (5%)``, ``{dataset} Gain (5%)``, etc.
+    """
+
+    fracs = tuple(float(x) for x in few_shot_fractions)
+    if not fracs:
+        raise ValueError("few_shot_fractions must contain at least one value")
+    multi_fs = len(fracs) > 1
+
+    def _fs_suffix(frac: float) -> str:
+        if not multi_fs:
+            return ""
+        return f" ({frac * 100:g}%)"
+
     metric_key = normalize_metric_name(metric, split=split)
-    filtered = [dict(row) for row in rows if infer_stage_regime(row) in {"zero_shot", "few_shot"}]
+    frac_set = set(fracs)
+    filtered: List[Dict[str, Any]] = []
+    for row in rows:
+        regime = infer_stage_regime(row)
+        if regime not in {"zero_shot", "few_shot"}:
+            continue
+        if regime == "few_shot":
+            eff = row_effective_train_fraction(row)
+            if eff is None:
+                continue
+            if not any(abs(float(eff) - float(f)) <= 1e-5 for f in frac_set):
+                continue
+        filtered.append(dict(row))
     if datasets is None:
         dataset_names = []
         for row in filtered:
@@ -295,7 +380,7 @@ def build_paper_summary(
     else:
         dataset_names = [str(item) for item in datasets]
 
-    model_names = [pretty_model_name(row) for row in filtered]
+    model_names = [transfer_table_model_name(row) for row in filtered]
     if model_order is None:
         ordered_models = []
         for name in model_names:
@@ -307,38 +392,54 @@ def build_paper_summary(
             if name not in ordered_models:
                 ordered_models.append(name)
 
-    value_map: Dict[Tuple[str, str, str], Optional[float]] = {}
+    value_map_zs: Dict[Tuple[str, str], Optional[float]] = {}
+    value_map_fs: Dict[Tuple[str, str, float], Optional[float]] = {}
     for row in filtered:
-        model = pretty_model_name(row)
+        model = transfer_table_model_name(row)
         dataset = row.get("dataset")
         if dataset not in dataset_names:
             continue
         regime = infer_stage_regime(row)
         value = coalesce_metric_row(row, metric_key)
-        value_map[(model, str(dataset), regime)] = None if value is None else float(value)
+        v = None if value is None else float(value)
+        if regime == "zero_shot":
+            value_map_zs[(model, str(dataset))] = v
+        else:
+            eff = row_effective_train_fraction(row)
+            if eff is None:
+                continue
+            matched = next((f for f in fracs if abs(float(eff) - float(f)) <= 1e-5), None)
+            if matched is not None:
+                value_map_fs[(model, str(dataset), matched)] = v
 
     summary: List[Dict[str, Any]] = []
     for model in ordered_models:
         item: Dict[str, Any] = {"Model": model}
         zs_values: List[float] = []
-        fs_values: List[float] = []
-        gains: List[float] = []
+        fs_by_frac: Dict[float, List[float]] = {f: [] for f in fracs}
+        gains_by_frac: Dict[float, List[float]] = {f: [] for f in fracs}
         for dataset in dataset_names:
-            zs = value_map.get((model, dataset, "zero_shot"))
-            fs = value_map.get((model, dataset, "few_shot"))
-            gain = None if zs is None or fs is None else float(zs) - float(fs)
+            zs = value_map_zs.get((model, dataset))
             item[f"{dataset} ZS"] = zs
-            item[f"{dataset} FS"] = fs
-            item[f"{dataset} Gain"] = gain
             if zs is not None:
                 zs_values.append(float(zs))
-            if fs is not None:
-                fs_values.append(float(fs))
-            if gain is not None:
-                gains.append(float(gain))
+            for frac in fracs:
+                suf = _fs_suffix(frac)
+                fs = value_map_fs.get((model, dataset, frac))
+                item[f"{dataset} FS{suf}"] = fs
+                gain = None if zs is None or fs is None else float(zs) - float(fs)
+                item[f"{dataset} Gain{suf}"] = gain
+                if fs is not None:
+                    fs_by_frac[frac].append(float(fs))
+                if gain is not None:
+                    gains_by_frac[frac].append(float(gain))
         item["Avg ZS"] = None if not zs_values else sum(zs_values) / len(zs_values)
-        item["Avg FS"] = None if not fs_values else sum(fs_values) / len(fs_values)
-        item["Avg Gain"] = None if not gains else sum(gains) / len(gains)
+        for frac in fracs:
+            suf = _fs_suffix(frac)
+            fv = fs_by_frac[frac]
+            gv = gains_by_frac[frac]
+            item[f"Avg FS{suf}"] = None if not fv else sum(fv) / len(fv)
+            item[f"Avg Gain{suf}"] = None if not gv else sum(gv) / len(gv)
         summary.append(item)
     return dataset_names, summary
 

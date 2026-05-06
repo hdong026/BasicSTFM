@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import sys
 from pathlib import Path
 from typing import Dict, List, Sequence
 
@@ -63,6 +64,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         help="Optional ordered model names for the table/figure.",
     )
+    parser.add_argument(
+        "--few-shot-fractions",
+        nargs="*",
+        type=float,
+        default=[0.05, 0.1],
+        help=(
+            "Few-shot train fractions: one figure panel per value, plus zero-shot (default: 0.05 0.1). "
+            "Example single panel aside from ZS: --few-shot-fractions 0.05"
+        ),
+    )
     return parser
 
 
@@ -90,6 +101,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         "DPM-SR++",
         "DPM-SR++-DSD-ZS",
         "DPM-SR++-DSD-FS",
+        "DPM-SR++-ZED",
         "DPM-SR++-ZED-ZS",
         "DPM-SR++-ZED-FS",
         "DPM-STFM",
@@ -105,15 +117,29 @@ def main(argv: Sequence[str] | None = None) -> None:
         "DPM-NoDiffusion",
         "DPM-NoDisentangle",
     )
+    fs_fracs = tuple(float(x) for x in args.few_shot_fractions)
+    if not fs_fracs:
+        raise SystemExit("Provide at least one --few-shot-fractions value (e.g. 0.05 0.1).")
     datasets, summary = build_paper_summary(
         rows,
         split=args.split,
         metric=args.metric,
         datasets=dataset_order,
         model_order=tuple(args.model_order) if args.model_order else default_model_order,
+        few_shot_fractions=fs_fracs,
     )
     if not summary:
         raise SystemExit("No transfer stages found for visualization.")
+
+    zed_row = next((r for r in summary if r.get("Model") == "DPM-SR++-ZED"), None)
+    if zed_row and datasets and not _row_has_any_fs_metric(zed_row):
+        print(
+            "Note: DPM-SR++-ZED has empty few-shot (FS) columns. "
+            "Add the few-shot run directory to --input-roots (e.g. "
+            "runs/dpm_srpp_zed_few_shot_monash15_then_mixed_12), or pass a stage_results.json "
+            "from the full ZED few-shot config that includes *_mechanism_tuning stages.",
+            file=sys.stderr,
+        )
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -134,6 +160,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         title=args.title,
         metric=args.metric,
         split=args.split,
+        few_shot_fractions=fs_fracs,
         png_path=png_path,
         pdf_path=pdf_path,
     )
@@ -143,6 +170,18 @@ def main(argv: Sequence[str] | None = None) -> None:
     print(f"CSV summary written to {csv_path}")
     print(f"Figure written to {png_path}")
     print(f"Figure written to {pdf_path}")
+
+
+def _row_has_any_fs_metric(row: Dict[str, object]) -> bool:
+    for key, val in row.items():
+        if key == "Model" or val is None:
+            continue
+        sk = str(key)
+        if "Gain" in sk:
+            continue
+        if " FS" in sk or sk.startswith("Avg FS"):
+            return True
+    return False
 
 
 def _load_rows(input_roots: Sequence[str]) -> List[Dict[str, object]]:
@@ -164,12 +203,12 @@ def build_latex_table(rows: Sequence[Dict[str, object]]) -> str:
     numeric_best_low = {
         column: _best_numeric(rows, column, maximize=False)
         for column in columns
-        if column.endswith(" ZS") or column.endswith(" FS") or column.startswith("Avg ")
+        if column != "Model" and "Gain" not in column
     }
     numeric_best_high = {
         column: _best_numeric(rows, column, maximize=True)
         for column in columns
-        if column.endswith(" Gain")
+        if "Gain" in column
     }
 
     align = "l" + "r" * (len(columns) - 1)
@@ -232,6 +271,7 @@ _MODEL_COLORS: Dict[str, str] = {
     "DPM-SR++-DSD-ZS": "#5C4D7D",
     "DPM-SR++-DSD-FS": "#4A3F75",
     "DPM-SR++-DSD-Full": "#6B5B95",
+    "DPM-SR++-ZED": "#2C1058",
     "DPM-SR++-ZED-ZS": "#2C1058",
     "DPM-SR++-ZED-FS": "#44337A",
     "DPM-STFM": "#CC79A7",
@@ -309,6 +349,7 @@ def _is_highlight_model(name: str) -> bool:
         "DPM-STFM",
         "DPM-SR++",
         "DPM-SR++-DSD-FS",
+        "DPM-SR++-ZED",
         "DPM-SR++-ZED-ZS",
     }
 
@@ -334,6 +375,7 @@ def make_figure(
     title: str,
     metric: str,
     split: str,
+    few_shot_fractions: Sequence[float],
     png_path: Path,
     pdf_path: Path,
 ) -> None:
@@ -350,8 +392,21 @@ def make_figure(
     model_names = [str(row["Model"]) for row in summary]
     colors = [_bar_color_for_model(name, i) for i, name in enumerate(model_names)]
 
+    fs_fracs = tuple(float(x) for x in few_shot_fractions)
+    multi = len(fs_fracs) > 1
+    n_fs = len(fs_fracs)
+    ncols = 1 + n_fs
+
     zero = {name: [row.get(f"{dataset} ZS") for dataset in datasets] for name, row in zip(model_names, summary)}
-    few = {name: [row.get(f"{dataset} FS") for dataset in datasets] for name, row in zip(model_names, summary)}
+    few_panels: List[Dict[str, List[object]]] = []
+    for frac in fs_fracs:
+        suf = f" ({frac * 100:g}%)" if multi else ""
+        few_panels.append(
+            {
+                name: [row.get(f"{dataset} FS{suf}") for dataset in datasets]
+                for name, row in zip(model_names, summary)
+            }
+        )
 
     plt.rcParams.update(
         {
@@ -382,12 +437,12 @@ def make_figure(
     # Wider with more groups so x labels (rotated) do not crowd; also raise figure height
     # slightly for the bottom label band.
     _n = max(len(datasets), 1)
-    # Two panels (zero-shot + few-shot); a bit wider per column than the old 3-panel layout.
-    _fig_w = min(1.6 * _n + 4.5, 18.0)
-    # Extra bottom space for slanted + abbreviated dataset names.
+    _fig_w = min(1.15 * _n + 2.35 * ncols, 26.0)
     _bottom = 0.26 + min(0.12, 0.02 * _n)
-    fig, axes = plt.subplots(1, 2, figsize=(_fig_w, 4.1))
-    fig.subplots_adjust(wspace=0.28, top=0.9, bottom=_bottom)
+    fig, axes = plt.subplots(1, ncols, figsize=(_fig_w, 4.1))
+    if ncols == 1:
+        axes = [axes]
+    fig.subplots_adjust(wspace=0.26 if ncols <= 2 else 0.22, top=0.9, bottom=_bottom)
     fig.suptitle(title, fontsize=12.5, fontweight="600", y=0.99, color="#111111")
 
     metric_label = f"{split.upper()} {metric.split('/')[-1].replace('_', ' ').upper()}"
@@ -402,16 +457,17 @@ def make_figure(
         ylabel=metric_label,
         higher_is_better=False,
     )
-    _plot_grouped_bars(
-        axes[1],
-        _xlab,
-        model_names,
-        few,
-        colors,
-        title="5% few-shot",
-        ylabel=metric_label,
-        higher_is_better=False,
-    )
+    for i, frac in enumerate(fs_fracs):
+        _plot_grouped_bars(
+            axes[1 + i],
+            _xlab,
+            model_names,
+            few_panels[i],
+            colors,
+            title=f"{frac * 100:g}% few-shot",
+            ylabel=metric_label,
+            higher_is_better=False,
+        )
 
     n = len(model_names)
     ncol = min(n, 4)
@@ -433,7 +489,7 @@ def make_figure(
 
     leg_handles = [h[1] for h in handles]
     leg_labels = [f"{h[0]} (ours)" if _is_highlight_model(h[0]) else h[0] for h in handles]
-    axes[1].legend(
+    axes[-1].legend(
         leg_handles,
         leg_labels,
         loc="upper center",

@@ -35,6 +35,8 @@ src/basicstfm/models/base.py
 src/basicstfm/models/dataset_modulation.py
 src/basicstfm/models/diffusion_mechanism_learner.py
 src/basicstfm/models/dpm_stfm.py
+src/basicstfm/models/dpm_stfm_dsd.py
+src/basicstfm/models/dpm_stfm_zed.py
 src/basicstfm/models/dpm_v2_stable_trunk_encoder.py
 src/basicstfm/models/dpm_v2_stfm.py
 src/basicstfm/models/dpm_v3_stfm.py
@@ -78,12 +80,14 @@ src/basicstfm/utils/__init__.py
 src/basicstfm/utils/checkpoint.py
 src/basicstfm/utils/diffusion_debug.py
 src/basicstfm/utils/distributed.py
+src/basicstfm/utils/domain_routing.py
 src/basicstfm/utils/logging.py
 src/basicstfm/utils/persistence_anchor.py
 src/basicstfm/utils/residual_ops.py
 src/basicstfm/utils/results.py
 src/basicstfm/utils/seed.py
 src/basicstfm/utils/spectral_ops.py
+src/basicstfm/utils/zed_routing.py
 src/examples/__init__.py
 src/examples/custom_loss.py
 src/examples/custom_model.py
