@@ -19,6 +19,7 @@ BASE = ROOT / "configs/budget_matched/dpm_srpp_zed_few_shot_monash15_then_mixed_
 
 FEW_SHOT_FA = {
     "load_from_zero_shot": True,
+    "adaptation_mode": "factorized_adapter",
     "enable_factorized_adaptation": True,
     "train_target_prompt": True,
     "target_prompt_dim": 64,

@@ -771,6 +771,16 @@ def _migrate_zed_route_row_weight(
     return buf
 
 
+def _is_zed_fa_adapter_only_key(name: str) -> bool:
+    """Few-shot factorized-adaptation modules that must not be forced from unrelated checkpoints."""
+
+    if name.startswith("zed_fa_"):
+        return True
+    if name.startswith("zed_fewshot_adapter"):
+        return True
+    return False
+
+
 def adapt_checkpoint_state_dict(
     model: torch.nn.Module,
     checkpoint_state: Dict[str, torch.Tensor],
@@ -894,6 +904,39 @@ def adapt_checkpoint_state_dict(
             )
             out[name] = param.clone()
             _note_kept_init(name)
+            continue
+
+        if _is_zed_fa_adapter_only_key(name):
+            logger.warning(
+                "Skipping FA-only key %r due to shape mismatch (checkpoint %s vs model %s); "
+                "kept model initialization.",
+                name,
+                tuple(tensor.shape),
+                tuple(param.shape),
+            )
+            out[name] = param.clone()
+            _note_kept_init(name)
+            continue
+
+        if (
+            not _is_zed_fa_adapter_only_key(name)
+            and name.endswith(("norm.weight", "norm.bias"))
+            and tensor.ndim == 1
+            and param.ndim == 1
+            and tensor.numel() == 1
+            and param.numel() > 1
+        ):
+            buf = param.clone()
+            val = tensor.to(dtype=buf.dtype, device=buf.device).reshape(())
+            buf.fill_(val)
+            out[name] = buf
+            inflated_keys.append(name)
+            logger.info(
+                "Expanded LayerNorm-style param %r from scalar checkpoint (numel=%d -> %d).",
+                name,
+                int(tensor.numel()),
+                int(param.numel()),
+            )
             continue
 
         if _is_zed_route_feature_first_linear_weight(name) and name.endswith(".weight"):

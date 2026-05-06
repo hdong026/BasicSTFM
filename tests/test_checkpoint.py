@@ -287,6 +287,26 @@ class CheckpointTest(unittest.TestCase):
             if k.startswith(("zed_router.", "zed_route_gate.", "zed_router_feat_adapter.")):
                 torch.testing.assert_close(v, m.state_dict()[k])
 
+    def test_zed_fa_only_key_shape_mismatch_skips(self):
+        from basicstfm.models.dpm_stfm_zed import _ZEDSpatialDeltaAdapter
+
+        class M(torch.nn.Module):
+            def __init__(self) -> None:
+                super().__init__()
+                self.hidden_dim = 128
+                self.zed_fa_spatial_adapter = _ZEDSpatialDeltaAdapter(18, bottleneck_ratio=8)
+
+        m = M()
+        ck = dict(m.state_dict())
+        ck["zed_fa_spatial_adapter.norm.weight"] = torch.ones(1)
+        ck["zed_fa_spatial_adapter.norm.bias"] = torch.zeros(1)
+        out = adapt_checkpoint_state_dict(m, ck)
+        self.assertEqual(tuple(out["zed_fa_spatial_adapter.norm.weight"].shape), (18,))
+        torch.testing.assert_close(
+            out["zed_fa_spatial_adapter.norm.weight"],
+            m.state_dict()["zed_fa_spatial_adapter.norm.weight"],
+        )
+
     def test_restore_rng_state_accepts_python_lists(self):
         state = {"torch": torch.get_rng_state().tolist()}
         restore_rng_state(state)

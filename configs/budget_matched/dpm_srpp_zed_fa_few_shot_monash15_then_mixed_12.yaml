@@ -1,5 +1,6 @@
 # ZED-FA (Factorized Adaptation): few-shot target prompt + spatial adapter + affine calib.
-# Load ZS/joint weights via stage load_from / ZED_ZERO_SHOT_CKPT; FA modules init fresh.
+# Few-shot stages use few_shot.load_from_zero_shot + trainer artifact ``zed_zero_shot`` (materialized
+# after joint pretrain) and load_method ``load_zed_zero_shot_backbone`` (FA modules stay fresh-init).
 # Effective freeze: stable_trunk, source experts (adapters+shared diffusion), event encoder
 # stay frozen (freeze: [all] minus FA/router/gate/router_feat_adapter/fewshot_adapter).
 
@@ -229,6 +230,7 @@ model:
     enable_fewshot_adapter: true
   few_shot:
     load_from_zero_shot: true
+    adaptation_mode: factorized_adapter
     enable_factorized_adaptation: true
     train_target_prompt: true
     target_prompt_dim: 64
@@ -527,6 +529,50 @@ pipeline:
       T_max: 2
     validate_every: 1
     gradient_clip_val: 5.0
+  - name: zed_zero_shot_checkpoint_materialize
+    eval_only: true
+    epochs: 0
+    reset_data: true
+    load_from: srd_xd_joint
+    strict_load: true
+    save_artifact: zed_zero_shot
+    data:
+      type: MultiDatasetWindowDataModule
+      dataset_group: cross_domain_sharded_sources
+      input_len: 12
+      output_len: 12
+      num_workers: 2
+      train_strategy: round_robin
+      eval_strategy: per_dataset
+      steps_per_epoch: 10000
+      max_val_windows: 256
+      max_test_windows: 512
+      split:
+      - 0.7
+      - 0.1
+      - 0.2
+      scaler:
+        type: standard
+    task:
+      type: StableResidualForecastingTaskV5
+      log_stage2_per_domain: true
+      dsd_routing_key: auto
+      phase: joint
+      model_mode: forecast
+      stable_target: lowfreq
+      final_weight: 1.0
+      stable_weight: 0.2
+      residual_weight: 0.2
+      spectral_weight: 0.02
+      spectral_scales:
+      - 1
+      use_revin: false
+      log_zed_metrics: true
+    losses:
+    - type: mae
+    metrics:
+    - type: mae
+    - type: rmse
   - name: metr_la_zero_shot
     eval_only: true
     epochs: 0
@@ -577,21 +623,21 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: ${env:ZED_ZERO_SHOT_CKPT,srd_xd_joint}
+    load_from: zed_zero_shot
+    load_method: load_zed_zero_shot_backbone
     strict_load: false
     few_shot_ratio: 0.05
     freeze:
     - all
     unfreeze:
-    - zed_router.*
-    - zed_route_gate.*
-    - zed_router_feat_adapter.*
-    - zed_fewshot_adapter.*
     - zed_fa_prompt_embed.*
     - zed_fa_prompt_proj.*
-    - zed_fa_router_bias
     - zed_fa_spatial_adapter.*
     - zed_fa_affine.*
+    - zed_fa_router_bias
+    - fusion_predictor.additive_logit
+    - fusion_predictor.gate_net.*
+    - calibration_head.*
     task:
       type: StableResidualForecastingTaskV5
       log_stage2_per_domain: true
@@ -646,21 +692,21 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: ${env:ZED_ZERO_SHOT_CKPT,srd_xd_joint}
+    load_from: zed_zero_shot
+    load_method: load_zed_zero_shot_backbone
     strict_load: false
     few_shot_ratio: 0.1
     freeze:
     - all
     unfreeze:
-    - zed_router.*
-    - zed_route_gate.*
-    - zed_router_feat_adapter.*
-    - zed_fewshot_adapter.*
     - zed_fa_prompt_embed.*
     - zed_fa_prompt_proj.*
-    - zed_fa_router_bias
     - zed_fa_spatial_adapter.*
     - zed_fa_affine.*
+    - zed_fa_router_bias
+    - fusion_predictor.additive_logit
+    - fusion_predictor.gate_net.*
+    - calibration_head.*
     task:
       type: StableResidualForecastingTaskV5
       log_stage2_per_domain: true
@@ -749,21 +795,21 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: ${env:ZED_ZERO_SHOT_CKPT,srd_xd_joint}
+    load_from: zed_zero_shot
+    load_method: load_zed_zero_shot_backbone
     strict_load: false
     few_shot_ratio: 0.05
     freeze:
     - all
     unfreeze:
-    - zed_router.*
-    - zed_route_gate.*
-    - zed_router_feat_adapter.*
-    - zed_fewshot_adapter.*
     - zed_fa_prompt_embed.*
     - zed_fa_prompt_proj.*
-    - zed_fa_router_bias
     - zed_fa_spatial_adapter.*
     - zed_fa_affine.*
+    - zed_fa_router_bias
+    - fusion_predictor.additive_logit
+    - fusion_predictor.gate_net.*
+    - calibration_head.*
     task:
       type: StableResidualForecastingTaskV5
       log_stage2_per_domain: true
@@ -818,21 +864,21 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: ${env:ZED_ZERO_SHOT_CKPT,srd_xd_joint}
+    load_from: zed_zero_shot
+    load_method: load_zed_zero_shot_backbone
     strict_load: false
     few_shot_ratio: 0.1
     freeze:
     - all
     unfreeze:
-    - zed_router.*
-    - zed_route_gate.*
-    - zed_router_feat_adapter.*
-    - zed_fewshot_adapter.*
     - zed_fa_prompt_embed.*
     - zed_fa_prompt_proj.*
-    - zed_fa_router_bias
     - zed_fa_spatial_adapter.*
     - zed_fa_affine.*
+    - zed_fa_router_bias
+    - fusion_predictor.additive_logit
+    - fusion_predictor.gate_net.*
+    - calibration_head.*
     task:
       type: StableResidualForecastingTaskV5
       log_stage2_per_domain: true
@@ -921,21 +967,21 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: ${env:ZED_ZERO_SHOT_CKPT,srd_xd_joint}
+    load_from: zed_zero_shot
+    load_method: load_zed_zero_shot_backbone
     strict_load: false
     few_shot_ratio: 0.05
     freeze:
     - all
     unfreeze:
-    - zed_router.*
-    - zed_route_gate.*
-    - zed_router_feat_adapter.*
-    - zed_fewshot_adapter.*
     - zed_fa_prompt_embed.*
     - zed_fa_prompt_proj.*
-    - zed_fa_router_bias
     - zed_fa_spatial_adapter.*
     - zed_fa_affine.*
+    - zed_fa_router_bias
+    - fusion_predictor.additive_logit
+    - fusion_predictor.gate_net.*
+    - calibration_head.*
     task:
       type: StableResidualForecastingTaskV5
       log_stage2_per_domain: true
@@ -990,21 +1036,21 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: ${env:ZED_ZERO_SHOT_CKPT,srd_xd_joint}
+    load_from: zed_zero_shot
+    load_method: load_zed_zero_shot_backbone
     strict_load: false
     few_shot_ratio: 0.1
     freeze:
     - all
     unfreeze:
-    - zed_router.*
-    - zed_route_gate.*
-    - zed_router_feat_adapter.*
-    - zed_fewshot_adapter.*
     - zed_fa_prompt_embed.*
     - zed_fa_prompt_proj.*
-    - zed_fa_router_bias
     - zed_fa_spatial_adapter.*
     - zed_fa_affine.*
+    - zed_fa_router_bias
+    - fusion_predictor.additive_logit
+    - fusion_predictor.gate_net.*
+    - calibration_head.*
     task:
       type: StableResidualForecastingTaskV5
       log_stage2_per_domain: true
@@ -1093,21 +1139,21 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: ${env:ZED_ZERO_SHOT_CKPT,srd_xd_joint}
+    load_from: zed_zero_shot
+    load_method: load_zed_zero_shot_backbone
     strict_load: false
     few_shot_ratio: 0.05
     freeze:
     - all
     unfreeze:
-    - zed_router.*
-    - zed_route_gate.*
-    - zed_router_feat_adapter.*
-    - zed_fewshot_adapter.*
     - zed_fa_prompt_embed.*
     - zed_fa_prompt_proj.*
-    - zed_fa_router_bias
     - zed_fa_spatial_adapter.*
     - zed_fa_affine.*
+    - zed_fa_router_bias
+    - fusion_predictor.additive_logit
+    - fusion_predictor.gate_net.*
+    - calibration_head.*
     task:
       type: StableResidualForecastingTaskV5
       log_stage2_per_domain: true
@@ -1162,21 +1208,21 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: ${env:ZED_ZERO_SHOT_CKPT,srd_xd_joint}
+    load_from: zed_zero_shot
+    load_method: load_zed_zero_shot_backbone
     strict_load: false
     few_shot_ratio: 0.1
     freeze:
     - all
     unfreeze:
-    - zed_router.*
-    - zed_route_gate.*
-    - zed_router_feat_adapter.*
-    - zed_fewshot_adapter.*
     - zed_fa_prompt_embed.*
     - zed_fa_prompt_proj.*
-    - zed_fa_router_bias
     - zed_fa_spatial_adapter.*
     - zed_fa_affine.*
+    - zed_fa_router_bias
+    - fusion_predictor.additive_logit
+    - fusion_predictor.gate_net.*
+    - calibration_head.*
     task:
       type: StableResidualForecastingTaskV5
       log_stage2_per_domain: true
@@ -1265,21 +1311,21 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: ${env:ZED_ZERO_SHOT_CKPT,srd_xd_joint}
+    load_from: zed_zero_shot
+    load_method: load_zed_zero_shot_backbone
     strict_load: false
     few_shot_ratio: 0.05
     freeze:
     - all
     unfreeze:
-    - zed_router.*
-    - zed_route_gate.*
-    - zed_router_feat_adapter.*
-    - zed_fewshot_adapter.*
     - zed_fa_prompt_embed.*
     - zed_fa_prompt_proj.*
-    - zed_fa_router_bias
     - zed_fa_spatial_adapter.*
     - zed_fa_affine.*
+    - zed_fa_router_bias
+    - fusion_predictor.additive_logit
+    - fusion_predictor.gate_net.*
+    - calibration_head.*
     task:
       type: StableResidualForecastingTaskV5
       log_stage2_per_domain: true
@@ -1334,21 +1380,21 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: ${env:ZED_ZERO_SHOT_CKPT,srd_xd_joint}
+    load_from: zed_zero_shot
+    load_method: load_zed_zero_shot_backbone
     strict_load: false
     few_shot_ratio: 0.1
     freeze:
     - all
     unfreeze:
-    - zed_router.*
-    - zed_route_gate.*
-    - zed_router_feat_adapter.*
-    - zed_fewshot_adapter.*
     - zed_fa_prompt_embed.*
     - zed_fa_prompt_proj.*
-    - zed_fa_router_bias
     - zed_fa_spatial_adapter.*
     - zed_fa_affine.*
+    - zed_fa_router_bias
+    - fusion_predictor.additive_logit
+    - fusion_predictor.gate_net.*
+    - calibration_head.*
     task:
       type: StableResidualForecastingTaskV5
       log_stage2_per_domain: true
@@ -1437,21 +1483,21 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: ${env:ZED_ZERO_SHOT_CKPT,srd_xd_joint}
+    load_from: zed_zero_shot
+    load_method: load_zed_zero_shot_backbone
     strict_load: false
     few_shot_ratio: 0.05
     freeze:
     - all
     unfreeze:
-    - zed_router.*
-    - zed_route_gate.*
-    - zed_router_feat_adapter.*
-    - zed_fewshot_adapter.*
     - zed_fa_prompt_embed.*
     - zed_fa_prompt_proj.*
-    - zed_fa_router_bias
     - zed_fa_spatial_adapter.*
     - zed_fa_affine.*
+    - zed_fa_router_bias
+    - fusion_predictor.additive_logit
+    - fusion_predictor.gate_net.*
+    - calibration_head.*
     task:
       type: StableResidualForecastingTaskV5
       log_stage2_per_domain: true
@@ -1506,21 +1552,21 @@ pipeline:
       scaler:
         type: standard
       split_mode: basicts
-    load_from: ${env:ZED_ZERO_SHOT_CKPT,srd_xd_joint}
+    load_from: zed_zero_shot
+    load_method: load_zed_zero_shot_backbone
     strict_load: false
     few_shot_ratio: 0.1
     freeze:
     - all
     unfreeze:
-    - zed_router.*
-    - zed_route_gate.*
-    - zed_router_feat_adapter.*
-    - zed_fewshot_adapter.*
     - zed_fa_prompt_embed.*
     - zed_fa_prompt_proj.*
-    - zed_fa_router_bias
     - zed_fa_spatial_adapter.*
     - zed_fa_affine.*
+    - zed_fa_router_bias
+    - fusion_predictor.additive_logit
+    - fusion_predictor.gate_net.*
+    - calibration_head.*
     task:
       type: StableResidualForecastingTaskV5
       log_stage2_per_domain: true

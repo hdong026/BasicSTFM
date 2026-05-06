@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -16,6 +17,23 @@ from basicstfm.utils.diffusion_debug import build_diffusion_debug_payload
 from basicstfm.utils.persistence_anchor import persistence_forecast_from_input
 from basicstfm.utils.zed_routing import build_route_features
 from basicstfm.utils.domain_routing import sanitize_domain_key
+
+logger = logging.getLogger(__name__)
+
+# Parameters loaded by ``load_zed_zero_shot_backbone`` (ZED-FA few-shot pretrain snapshot).
+ZED_ZERO_SHOT_BACKBONE_PREFIXES: Tuple[str, ...] = (
+    "stable_trunk.",
+    "residual_event_encoder.",
+    "residual_constructor.",
+    "diffusion_mechanism_learner.",
+    "zed_expert_adapters.",
+    "zed_expert_diffusions.",
+    "zed_router.",
+    "zed_route_gate.",
+    "zed_router_feat_adapter.",
+    "fusion_predictor.",
+    "calibration_head.",
+)
 
 
 class _SoftmaxRouterMLP(nn.Module):
@@ -282,9 +300,12 @@ class SRDSTFMBackboneZED(SRDSTFMBackbone):
         self._routing_key_cfg = str(self._stage2.get("routing_key", "auto")).lower()
 
         adapt_mode = str(self._few_shot_cfg.get("adaptation_mode", "router_gate_adapter")).lower()
-        use_rfa = bool(self._few_shot_cfg.get("train_router_feat_adapter", True))
-        if adapt_mode != "router_gate_adapter":
+        if adapt_mode in {"factorized_adapter", "zed_fa"}:
             use_rfa = bool(self._few_shot_cfg.get("train_router_feat_adapter", False))
+        elif adapt_mode != "router_gate_adapter":
+            use_rfa = bool(self._few_shot_cfg.get("train_router_feat_adapter", False))
+        else:
+            use_rfa = bool(self._few_shot_cfg.get("train_router_feat_adapter", True))
         rfa_bottleneck = int(self._few_shot_cfg.get("router_feat_bottleneck", bottleneck))
         self.zed_router_feat_adapter: Optional[_EventAdapter] = None
         self._router_feat_adapter_scale = float(self._few_shot_cfg.get("router_feat_adapter_scale", 0.25))
@@ -354,6 +375,34 @@ class SRDSTFMBackboneZED(SRDSTFMBackbone):
         if isinstance(idx, torch.Tensor) and idx.ndim == 1:
             return {"router_dataset_index": idx}
         return {}
+
+    def load_zed_zero_shot_backbone(self, path: str, strict: bool = False) -> Dict[str, Any]:
+        """Load pretrained ZED (joint / zero-shot) weights; leave FA-only modules randomly initialized."""
+
+        from basicstfm.models.foundation.common import load_filtered_weights
+
+        miss, unexp = load_filtered_weights(
+            self,
+            path,
+            strict=strict,
+            include_prefixes=ZED_ZERO_SHOT_BACKBONE_PREFIXES,
+            map_location="cpu",
+        )
+        logger.info(
+            "load_zed_zero_shot_backbone: path=%r strict=%s included_prefixes=%s",
+            path,
+            strict,
+            list(ZED_ZERO_SHOT_BACKBONE_PREFIXES),
+        )
+        return {
+            "missing_keys": miss,
+            "unexpected_keys": unexp,
+            "zed_load_included_prefixes": list(ZED_ZERO_SHOT_BACKBONE_PREFIXES),
+            "zed_load_excluded_note": (
+                "Parameters outside included prefixes (notably zed_fa_* and zed_fewshot_adapter.*) "
+                "keep current initialization."
+            ),
+        }
 
     def zed_fa_enabled(self) -> bool:
         return bool(getattr(self, "_zed_fa_enabled", False))

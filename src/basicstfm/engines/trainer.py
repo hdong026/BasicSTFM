@@ -184,6 +184,9 @@ class MultiStageTrainer:
         val_logs: Optional[Dict[str, float]] = None
 
         loaded_ckpt_for_fewshot: Optional[str] = None
+        forced_zs_artifact: Optional[str] = None
+        checkpoint_effective_ref: str = str(stage.load_from or "")
+
         if self._should_resume_stage(stage, stage_index):
             ckpt_path = str(self._resume_checkpoint)
             loaded_ckpt_for_fewshot = ckpt_path
@@ -210,10 +213,17 @@ class MultiStageTrainer:
                 info["unexpected_keys"],
             )
 
-        if stage.load_from and not resumed_this_stage:
-            ckpt_path = self._resolve_checkpoint_reference(stage.load_from)
+        if (
+            not resumed_this_stage
+            and (
+                stage.load_from
+                or self._few_shot_requires_zero_shot_artifact(stage, stage_index)
+            )
+        ):
+            ckpt_path, forced_zs_artifact, checkpoint_effective_ref = (
+                self._resolve_stage_checkpoint_for_load(stage, stage_index)
+            )
             loaded_ckpt_for_fewshot = ckpt_path
-            self._warn_few_shot_zero_shot_checkpoint(stage, stage_index, ckpt_path)
             info = self._load_stage_weights(
                 ckpt_path,
                 stage=stage,
@@ -224,8 +234,16 @@ class MultiStageTrainer:
                 "Loaded stage weights from %s with method=%s (missing=%s unexpected=%s)",
                 ckpt_path,
                 stage.load_method,
-                info["missing_keys"],
-                info["unexpected_keys"],
+                info.get("missing_keys", []),
+                info.get("unexpected_keys", []),
+            )
+            self._log_few_shot_load_bootstrap(
+                stage,
+                stage_index,
+                ckpt_path,
+                forced_zs_artifact,
+                checkpoint_effective_ref,
+                info,
             )
 
         self._maybe_log_few_shot_stage_audit(stage, stage_index, loaded_ckpt_for_fewshot)
@@ -270,6 +288,14 @@ class MultiStageTrainer:
                 test_logs=test_logs,
                 best_score=None,
             )
+            if stage.save_artifact and loaded_ckpt_for_fewshot:
+                ap = str(Path(loaded_ckpt_for_fewshot).resolve())
+                self.artifacts[stage.save_artifact] = ap
+                self.logger.info(
+                    "eval_only: registered save_artifact %r -> %s",
+                    stage.save_artifact,
+                    ap,
+                )
             return
 
         if start_epoch > stage.epochs:
@@ -749,6 +775,81 @@ class MultiStageTrainer:
             recipes.append(deepcopy(current))
         return recipes
 
+    def _few_shot_requires_zero_shot_artifact(self, stage: StageSpec, stage_index: int) -> bool:
+        fs = self._stage_model_recipes[stage_index].get("few_shot")
+        return bool(
+            stage.few_shot_ratio is not None
+            and isinstance(fs, dict)
+            and fs.get("load_from_zero_shot")
+        )
+
+    def _resolve_stage_checkpoint_for_load(
+        self, stage: StageSpec, stage_index: int
+    ) -> tuple[str, Optional[str], str]:
+        """Return ``(resolved_path, forced_artifact_name|None, reference_for_logs)``."""
+
+        fs = self._stage_model_recipes[stage_index].get("few_shot")
+        if self._few_shot_requires_zero_shot_artifact(stage, stage_index):
+            for art in ("zed_zero_shot", "zero_shot"):
+                p = self.artifacts.get(art)
+                if p:
+                    pp = Path(str(p))
+                    if pp.is_file():
+                        return str(pp.resolve()), art, f"artifact:{art}"
+            raise RuntimeError(
+                "few_shot.load_from_zero_shot=true but no usable zero-shot checkpoint was registered. "
+                "Run an earlier eval-only stage that sets save_artifact: zed_zero_shot (or zero_shot) "
+                "after loading joint / ZED weights, or point an env var to a compatible checkpoint and "
+                "register it. "
+                f"Known trainer artifacts: {sorted(self.artifacts.keys())}"
+            )
+        ref = str(stage.load_from or "")
+        if not ref:
+            raise RuntimeError(
+                f"Stage {stage.name!r} has no load_from and does not use few_shot zero-shot forcing"
+            )
+        return self._resolve_checkpoint_reference(ref), None, ref
+
+    def _log_few_shot_load_bootstrap(
+        self,
+        stage: StageSpec,
+        stage_index: int,
+        resolved_path: str,
+        forced_artifact: Optional[str],
+        load_ref: str,
+        info: Dict[str, Any],
+    ) -> None:
+        if stage.few_shot_ratio is None:
+            return
+        fs = self._stage_model_recipes[stage_index].get("few_shot")
+        lzs = bool(isinstance(fs, dict) and fs.get("load_from_zero_shot"))
+        model = unwrap_model(self.model) if self.model is not None else None
+        trainable_names: list[str] = []
+        frozen_names: list[str] = []
+        if model is not None:
+            for n, p in model.named_parameters():
+                (trainable_names if p.requires_grad else frozen_names).append(n)
+        inc = info.get("zed_load_included_prefixes")
+        exc_note = info.get("zed_load_excluded_note")
+        self.logger.info(
+            "[few-shot load bootstrap] stage=%s | few_shot.load_from_zero_shot=%s | "
+            "load_from (yaml_ref)=%r | resolved_checkpoint_path=%s | resolved_artifact=%s | "
+            "load_method=%s | strict_load=%s | zed_included_prefixes=%s | zed_excluded_note=%s | "
+            "trainable_count=%d (%s) | frozen_count=%d",
+            stage.name,
+            lzs,
+            load_ref,
+            resolved_path,
+            forced_artifact,
+            stage.load_method,
+            stage.strict_load,
+            inc,
+            exc_note,
+            len(trainable_names),
+            ", ".join(trainable_names[:24]) + (" ..." if len(trainable_names) > 24 else ""),
+            len(frozen_names),
+        )
+
     def _stage_checkpoint_filters(
         self, stage: StageSpec
     ) -> tuple[Optional[list[str]], Optional[list[str]], bool]:
@@ -802,33 +903,29 @@ class MultiStageTrainer:
             fr,
         )
 
-    def _warn_few_shot_zero_shot_checkpoint(
-        self,
-        stage: StageSpec,
-        stage_index: int,
-        resolved_path: str,
-    ) -> None:
-        fs = self._stage_model_recipes[stage_index].get("few_shot")
-        if not isinstance(fs, dict) or not fs.get("load_from_zero_shot"):
-            return
-        ref = str(stage.load_from or "")
-        rl = ref.lower()
-        suspicious = any(
-            tok in rl for tok in ("monash", "warmup", "stage0", "stage_0", "budget_monash")
-        )
-        zed_hint = any(
-            tok in rl for tok in ("zed", "zero_shot", "zs_ckpt", "joint", "srd_xd_joint", "cross_domain_joint")
-        )
-        if suspicious and not zed_hint:
-            self.logger.warning(
-                "few_shot.load_from_zero_shot is true but stage.load_from=%r may reference an early "
-                "warmup / stage-I checkpoint, not the ZED zero-shot artifact; resolved path=%s",
-                ref,
-                resolved_path,
-            )
-
     def _dry_run_checkpoint_summaries(self) -> None:
-        for st in self.plan.stages:
+        for idx, st in enumerate(self.plan.stages):
+            fs = self._stage_model_recipes[idx].get("few_shot")
+            if (
+                st.few_shot_ratio is not None
+                and isinstance(fs, dict)
+                and fs.get("load_from_zero_shot")
+            ):
+                arts: list[str] = []
+                for art in ("zed_zero_shot", "zero_shot"):
+                    p = self.artifacts.get(art)
+                    if p:
+                        arts.append(f"{art} -> {p}")
+                self.logger.info(
+                    "[few-shot dry-run] stage=%s | few_shot.load_from_zero_shot=true | "
+                    "yaml load_from=%r (path forced from zed_zero_shot/zero_shot artifact) | "
+                    "artifact_candidates=%s | load_method=%s | strict_load=%s",
+                    st.name,
+                    st.load_from,
+                    arts or ["<run prior stages to materialize zed_zero_shot>"],
+                    st.load_method,
+                    st.strict_load,
+                )
             if not st.load_from:
                 continue
             lp, sp, full = self._stage_checkpoint_filters(st)
@@ -900,19 +997,17 @@ class MultiStageTrainer:
         except TypeError:
             result = loader(path)
 
-        info = {
+        info: Dict[str, Any] = {
             "missing_keys": [],
             "unexpected_keys": [],
             "extra": read_checkpoint_metadata(path, map_location="cpu"),
+            "adapt": {},
         }
-        if isinstance(result, tuple) and len(result) == 2:
+        if isinstance(result, dict):
+            info.update(result)
+        elif isinstance(result, tuple) and len(result) == 2:
             info["missing_keys"] = list(result[0])
             info["unexpected_keys"] = list(result[1])
-        elif isinstance(result, dict):
-            info["missing_keys"] = list(result.get("missing_keys", []))
-            info["unexpected_keys"] = list(result.get("unexpected_keys", []))
-            if "extra" in result:
-                info["extra"] = dict(result["extra"])
         return info
 
     def _apply_trainability(self, stage: StageSpec) -> None:
