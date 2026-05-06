@@ -110,6 +110,7 @@ class MultiStageTrainer:
             self.logger.info("Stage plan:\n%s", json.dumps(self.plan.describe(), indent=2))
             if self.dry_run:
                 self._dry_run_few_shot_summaries()
+                self._dry_run_checkpoint_summaries()
                 self.logger.info("Dry run complete. No model or data objects were built.")
                 return
 
@@ -212,6 +213,7 @@ class MultiStageTrainer:
         if stage.load_from and not resumed_this_stage:
             ckpt_path = self._resolve_checkpoint_reference(stage.load_from)
             loaded_ckpt_for_fewshot = ckpt_path
+            self._warn_few_shot_zero_shot_checkpoint(stage, stage_index, ckpt_path)
             info = self._load_stage_weights(
                 ckpt_path,
                 stage=stage,
@@ -747,6 +749,104 @@ class MultiStageTrainer:
             recipes.append(deepcopy(current))
         return recipes
 
+    def _stage_checkpoint_filters(
+        self, stage: StageSpec
+    ) -> tuple[Optional[list[str]], Optional[list[str]], bool]:
+        """Return (load_prefixes, skip_prefixes, load_full_model) for ``adapt_checkpoint_state_dict``."""
+
+        cfg = stage.checkpoint if isinstance(stage.checkpoint, dict) else {}
+        load_full = bool(cfg.get("load_full_model", False))
+        load_p = cfg.get("load_prefixes")
+        skip_p = cfg.get("skip_prefixes")
+        lp = [str(x) for x in load_p] if load_p else None
+        sp = [str(x) for x in skip_p] if skip_p else None
+        if load_full:
+            return lp, sp, True
+        if lp is None and sp is None and stage.load_method == "stable_trunk_channel_inflate":
+            sp = [
+                "residual_event_encoder.*",
+                "diffusion_experts.*",
+                "zed_router.*",
+                "zed_route_gate.*",
+                "zed_router_feat_adapter.*",
+                "fusion_predictor.*",
+                "calibration_head.*",
+                "zed_fa_*",
+            ]
+        return lp, sp, load_full
+
+    def _log_checkpoint_load_summary(
+        self,
+        path: str,
+        stage: StageSpec,
+        load_prefixes: Optional[list[str]],
+        skip_prefixes: Optional[list[str]],
+        info: Dict[str, Any],
+    ) -> None:
+        adapt = info.get("adapt") or {}
+        if self.model is None:
+            return
+        model = unwrap_model(self.model)
+        tr = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        fr = sum(p.numel() for p in model.parameters() if not p.requires_grad)
+        self.logger.info(
+            "[checkpoint load summary] path=%s | stage=%s | load_prefixes=%s | skip_prefixes=%s | "
+            "migrated_route_feature_keys=%s | kept_init_keys=%s | trainable_params=%d | frozen_params=%d",
+            path,
+            stage.name,
+            load_prefixes,
+            skip_prefixes,
+            adapt.get("migrated_route_feature_keys", []),
+            adapt.get("kept_init_keys", []),
+            tr,
+            fr,
+        )
+
+    def _warn_few_shot_zero_shot_checkpoint(
+        self,
+        stage: StageSpec,
+        stage_index: int,
+        resolved_path: str,
+    ) -> None:
+        fs = self._stage_model_recipes[stage_index].get("few_shot")
+        if not isinstance(fs, dict) or not fs.get("load_from_zero_shot"):
+            return
+        ref = str(stage.load_from or "")
+        rl = ref.lower()
+        suspicious = any(
+            tok in rl for tok in ("monash", "warmup", "stage0", "stage_0", "budget_monash")
+        )
+        zed_hint = any(
+            tok in rl for tok in ("zed", "zero_shot", "zs_ckpt", "joint", "srd_xd_joint", "cross_domain_joint")
+        )
+        if suspicious and not zed_hint:
+            self.logger.warning(
+                "few_shot.load_from_zero_shot is true but stage.load_from=%r may reference an early "
+                "warmup / stage-I checkpoint, not the ZED zero-shot artifact; resolved path=%s",
+                ref,
+                resolved_path,
+            )
+
+    def _dry_run_checkpoint_summaries(self) -> None:
+        for st in self.plan.stages:
+            if not st.load_from:
+                continue
+            lp, sp, full = self._stage_checkpoint_filters(st)
+            try:
+                resolved = self._resolve_checkpoint_reference(st.load_from)
+            except Exception as exc:
+                resolved = f"<unresolved {st.load_from!r}: {exc!r}>"
+            self.logger.info(
+                "[checkpoint dry-run summary] stage=%s | load_from (resolved)=%s | load_full_model=%s | "
+                "load_prefixes=%s | skip_prefixes=%s | "
+                "(trainable/frozen parameter counts require a run without --dry-run)",
+                st.name,
+                resolved,
+                full,
+                lp,
+                sp,
+            )
+
     def _load_stage_weights(
         self,
         path: str,
@@ -771,7 +871,9 @@ class MultiStageTrainer:
                 or stage.allow_stable_trunk_channel_inflate
             )
             foundation_inflate = stage.load_method == "foundation_channel_inflate"
-            return load_checkpoint(
+            load_p, skip_p, _ = self._stage_checkpoint_filters(stage)
+            adapt_rep: Dict[str, Any] = {}
+            info = load_checkpoint(
                 path,
                 model,
                 optimizer=optimizer,
@@ -781,7 +883,12 @@ class MultiStageTrainer:
                 restore_rng=restore_rng,
                 stable_trunk_channel_inflate=stable_trunk_inflate,
                 foundation_channel_inflate=foundation_inflate,
+                load_prefixes=load_p,
+                skip_prefixes=skip_p,
+                adapt_report=adapt_rep,
             )
+            self._log_checkpoint_load_summary(path, stage, load_p, skip_p, info)
+            return info
 
         loader = getattr(model, stage.load_method, None)
         if loader is None:

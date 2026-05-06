@@ -51,6 +51,7 @@ class StageSpec:
     few_shot_ratio: Optional[float] = None
     few_shot_windows: Optional[int] = None
     early_stop_patience: Optional[int] = None
+    checkpoint: Optional[Dict[str, Any]] = None
 
     def __post_init__(self) -> None:
         if self.epochs < 1 and not self.eval_only:
@@ -129,6 +130,7 @@ class StagePlan:
                     if stage.train_windows is not None
                     else stage.few_shot_windows
                 ),
+                "checkpoint": stage.checkpoint,
             }
             for stage in self.stages
         ]

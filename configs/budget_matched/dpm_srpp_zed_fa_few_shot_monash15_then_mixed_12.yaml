@@ -329,6 +329,12 @@ pipeline:
     load_from: ${env:MONASH_STAGE0_CKPT,dpm_budget_monash_warmup}
     load_method: stable_trunk_channel_inflate
     strict_load: false
+    checkpoint:
+      load_full_model: false
+      skip_prefixes:
+        - zed_router
+        - zed_route_gate
+        - zed_router_feat_adapter
     save_artifact: srd_xd_stable
     reset_data: true
     data:

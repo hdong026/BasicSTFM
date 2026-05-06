@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import fnmatch
 import logging
 import random
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
 import torch
@@ -608,12 +609,177 @@ def _migrate_zed_route_linear_weight(
     return buf
 
 
+def _normalize_checkpoint_patterns(patterns: Sequence[str]) -> List[str]:
+    """Turn bare prefixes like ``zed_router`` into ``zed_router.*`` for fnmatch."""
+
+    out: List[str] = []
+    for raw in patterns:
+        p = str(raw).strip()
+        if not p:
+            continue
+        if any(ch in p for ch in "*?[]"):
+            out.append(p)
+        elif p.endswith(".*"):
+            out.append(p)
+        else:
+            out.append(f"{p}.*")
+    return out
+
+
+def _checkpoint_key_matches_any(name: str, patterns: Sequence[str]) -> bool:
+    for p in patterns:
+        if fnmatch.fnmatch(name, p):
+            return True
+    return False
+
+
+def filter_checkpoint_state_dict(
+    checkpoint_state: Dict[str, Any],
+    *,
+    load_prefixes: Optional[Sequence[str]] = None,
+    skip_prefixes: Optional[Sequence[str]] = None,
+) -> tuple[Dict[str, Any], List[str]]:
+    """Drop checkpoint keys per stage policy. Returns (filtered_state, list of keys not loaded from ckpt)."""
+
+    skipped: List[str] = []
+    work = {k: v for k, v in checkpoint_state.items() if isinstance(v, torch.Tensor)}
+    if skip_prefixes:
+        sp = _normalize_checkpoint_patterns(skip_prefixes)
+        new: Dict[str, Any] = {}
+        for k, v in work.items():
+            if _checkpoint_key_matches_any(k, sp):
+                skipped.append(k)
+            else:
+                new[k] = v
+        work = new
+    if load_prefixes:
+        lp = _normalize_checkpoint_patterns(load_prefixes)
+        new = {}
+        for k, v in work.items():
+            if _checkpoint_key_matches_any(k, lp):
+                new[k] = v
+            else:
+                skipped.append(k)
+        work = new
+    return work, skipped
+
+
+def _is_zed_route_feature_first_linear_weight(name: str) -> bool:
+    if name in {
+        "zed_router.net.0.weight",
+        "zed_route_gate.fc.weight",
+        "zed_router_feat_adapter.net.0.weight",
+    }:
+        return True
+    for pat in ("target_router_adapter.net.0.weight", "router_offset.net.0.weight"):
+        if fnmatch.fnmatch(name, pat):
+            return True
+    return False
+
+
+def _migrate_zed_route_input_weight(
+    name: str,
+    ck_tensor: torch.Tensor,
+    model_tensor: torch.Tensor,
+    model: torch.nn.Module,
+) -> Optional[torch.Tensor]:
+    """Migrate ZED route-input Linear weights ``[out_dim, route_dim]`` when ``route_dim`` changes."""
+
+    if ck_tensor.ndim != 2 or model_tensor.ndim != 2:
+        return None
+    if ck_tensor.shape[0] != model_tensor.shape[0]:
+        return None
+    if ck_tensor.shape[1] == model_tensor.shape[1]:
+        return ck_tensor.to(device=model_tensor.device, dtype=model_tensor.dtype)
+    h_dim = getattr(model, "hidden_dim", None)
+    if h_dim is not None:
+        migrated = _migrate_zed_route_linear_weight(
+            ck_tensor,
+            model_tensor,
+            hidden_dim=int(h_dim),
+        )
+        if migrated is not None:
+            logger.info(
+                "Migrated ZED routing weight %r (checkpoint in_features=%d -> model in_features=%d): "
+                "copied graph + event blocks and overlapping temporal channels.",
+                name,
+                ck_tensor.shape[1],
+                model_tensor.shape[1],
+            )
+            return migrated
+    buf = model_tensor.clone()
+    n = min(int(ck_tensor.shape[1]), int(model_tensor.shape[1]))
+    buf[:, :n].copy_(ck_tensor[:, :n].to(device=buf.device, dtype=buf.dtype))
+    logger.info(
+        "Migrated ZED routing weight %r (fallback column overlap: in_features %d -> %d, copied %d).",
+        name,
+        ck_tensor.shape[1],
+        model_tensor.shape[1],
+        n,
+    )
+    return buf
+
+
+def _is_zed_route_feature_row_linear_weight(name: str) -> bool:
+    if name == "zed_router_feat_adapter.net.2.weight":
+        return True
+    if fnmatch.fnmatch(name, "zed_fa_prompt_proj.weight"):
+        return True
+    return False
+
+
+def _migrate_zed_route_row_weight(
+    name: str,
+    ck_tensor: torch.Tensor,
+    model_tensor: torch.Tensor,
+    model: torch.nn.Module,
+) -> Optional[torch.Tensor]:
+    """Migrate weights shaped ``[route_feat_dim, other]`` when the leading dim uses route layout."""
+
+    if ck_tensor.ndim != 2 or model_tensor.ndim != 2:
+        return None
+    if ck_tensor.shape[1] != model_tensor.shape[1]:
+        return None
+    if ck_tensor.shape[0] == model_tensor.shape[0]:
+        return ck_tensor.to(device=model_tensor.device, dtype=model_tensor.dtype)
+    h_dim = getattr(model, "hidden_dim", None)
+    if h_dim is not None:
+        migrated_t = _migrate_zed_route_linear_weight(
+            ck_tensor.T,
+            model_tensor.T,
+            hidden_dim=int(h_dim),
+        )
+        if migrated_t is not None:
+            logger.info(
+                "Migrated ZED route-row weight %r (checkpoint dim0=%d -> model dim0=%d): "
+                "copied graph + event blocks and overlapping temporal channels.",
+                name,
+                ck_tensor.shape[0],
+                model_tensor.shape[0],
+            )
+            return migrated_t.T
+    buf = model_tensor.clone()
+    n = min(int(ck_tensor.shape[0]), int(model_tensor.shape[0]))
+    buf[:n].copy_(ck_tensor[:n].to(device=buf.device, dtype=buf.dtype))
+    logger.info(
+        "Migrated ZED route-row weight %r (fallback row overlap: %d -> %d, copied %d).",
+        name,
+        ck_tensor.shape[0],
+        model_tensor.shape[0],
+        n,
+    )
+    return buf
+
+
 def adapt_checkpoint_state_dict(
     model: torch.nn.Module,
     checkpoint_state: Dict[str, torch.Tensor],
     *,
     stable_trunk_channel_inflate: bool = False,
     foundation_channel_inflate: bool = False,
+    load_prefixes: Optional[Sequence[str]] = None,
+    skip_prefixes: Optional[Sequence[str]] = None,
+    adapt_report: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, torch.Tensor]:
     """Align a checkpoint to the current model, expanding small node/channel embedding tables.
 
@@ -634,19 +800,51 @@ def adapt_checkpoint_state_dict(
     mismatches that cannot be expanded emit an explicit warning and keep the current initialization.
     """
 
+    working_ckpt: Dict[str, Any] = {k: v for k, v in checkpoint_state.items()}
+    policy_skipped: list[str] = []
+    if load_prefixes or skip_prefixes:
+        filtered, policy_skipped = filter_checkpoint_state_dict(
+            working_ckpt,
+            load_prefixes=load_prefixes,
+            skip_prefixes=skip_prefixes,
+        )
+        working_ckpt = filtered
+
+    rep = adapt_report
+    if rep is not None:
+        rep["skipped_by_checkpoint_policy"] = list(policy_skipped)
+        rep.setdefault("migrated_route_feature_keys", [])
+        rep.setdefault("kept_init_keys", [])
+
     model_state = model.state_dict()
     out: Dict[str, Any] = {}
     inflated_keys: list[str] = []
     kept_init_keys: list[str] = []
     unchanged_keys: list[str] = []
-    ck_miss = [k for k in model_state if k not in checkpoint_state]
-    ck_unexp = [k for k in checkpoint_state if k not in model_state]
+    migrated_route_keys: list[str] = []
+    ck_miss = [k for k in model_state if k not in working_ckpt]
+    ck_unexp = [k for k in working_ckpt if k not in model_state]
+
+    def _note_kept_init(key: str) -> None:
+        kept_init_keys.append(key)
+        if rep is not None:
+            lst = rep.setdefault("kept_init_keys", [])
+            if key not in lst:
+                lst.append(key)
+
+    def _note_route_migrated(key: str) -> None:
+        migrated_route_keys.append(key)
+        inflated_keys.append(key)
+        if rep is not None:
+            lst = rep.setdefault("migrated_route_feature_keys", [])
+            if key not in lst:
+                lst.append(key)
 
     for name, param in model_state.items():
-        if name not in checkpoint_state:
+        if name not in working_ckpt:
             out[name] = param
             continue
-        tensor = checkpoint_state[name]
+        tensor = working_ckpt[name]
         if not isinstance(tensor, torch.Tensor):
             out[name] = tensor
             continue
@@ -664,7 +862,7 @@ def adapt_checkpoint_state_dict(
                     inflated_keys.append(name)
                     _log_stable_trunk_inflate_line(name, tensor, param, model)
                 else:
-                    kept_init_keys.append(name)
+                    _note_kept_init(name)
                 continue
 
         if foundation_channel_inflate:
@@ -679,38 +877,46 @@ def adapt_checkpoint_state_dict(
                 if outcome.used_checkpoint:
                     inflated_keys.append(name)
                 else:
-                    kept_init_keys.append(name)
+                    _note_kept_init(name)
                 continue
 
         if tensor.shape == param.shape:
-            out[name] = tensor
+            out[name] = tensor.to(device=param.device, dtype=param.dtype)
             unchanged_keys.append(name)
             continue
-        if name in ("zed_router.net.0.weight", "zed_route_gate.fc.weight"):
-            h_dim = getattr(model, "hidden_dim", None)
-            if h_dim is not None:
-                migrated = _migrate_zed_route_linear_weight(
-                    tensor,
-                    param,
-                    hidden_dim=int(h_dim),
-                )
-                if migrated is not None:
-                    logger.info(
-                        "Migrated ZED routing weight %r (checkpoint in_features=%d -> model in_features=%d): "
-                        "copied graph + event blocks and overlapping temporal channels.",
-                        name,
-                        tensor.shape[1],
-                        param.shape[1],
-                    )
-                    out[name] = migrated
-                    inflated_keys.append(name)
-                    continue
-        if name.startswith("zed_router.") or name.startswith("zed_route_gate."):
+
+        if name.endswith(".bias") and tensor.ndim == 1 and param.ndim == 1:
+            logger.warning(
+                "Checkpoint bias %r shape %s vs model %s; keeping model initialization.",
+                name,
+                tuple(tensor.shape),
+                tuple(param.shape),
+            )
+            out[name] = param.clone()
+            _note_kept_init(name)
+            continue
+
+        if _is_zed_route_feature_first_linear_weight(name) and name.endswith(".weight"):
+            migrated = _migrate_zed_route_input_weight(name, tensor, param, model)
+            if migrated is not None:
+                out[name] = migrated
+                _note_route_migrated(name)
+                continue
+
+        if _is_zed_route_feature_row_linear_weight(name) and name.endswith(".weight"):
+            migrated_r = _migrate_zed_route_row_weight(name, tensor, param, model)
+            if migrated_r is not None:
+                out[name] = migrated_r
+                _note_route_migrated(name)
+                continue
+
+        if name.startswith(("zed_router.", "zed_route_gate.", "zed_router_feat_adapter.")):
             raise RuntimeError(
                 f"Cannot load {name!r}: checkpoint shape {tuple(tensor.shape)} vs model "
                 f"{tuple(param.shape)} (ZED routing: try matching hidden_dim / router_inputs, "
                 f"or remove dataset_id_embed from router for migration)"
             )
+
         if (
             tensor.ndim == 2
             and param.ndim == 2
@@ -731,12 +937,22 @@ def adapt_checkpoint_state_dict(
                 f"vs model {tuple(param.shape)}"
             )
 
-    if stable_trunk_channel_inflate or foundation_channel_inflate:
+    if (
+        stable_trunk_channel_inflate
+        or foundation_channel_inflate
+        or inflated_keys
+        or kept_init_keys
+        or policy_skipped
+    ):
         logger.info("loaded unchanged keys count: %d", len(unchanged_keys))
-        logger.info("inflated keys count: %d", len(inflated_keys))
+        logger.info("inflated / migrated keys count: %d", len(inflated_keys))
+        if migrated_route_keys:
+            logger.info("ZED route-feature migrated keys: %s", migrated_route_keys)
         logger.info("kept model init (checkpoint skipped) count: %d", len(kept_init_keys))
         logger.info("missing keys (not in checkpoint): %d", len(ck_miss))
         logger.info("unexpected keys (not in model): %d", len(ck_unexp))
+        if policy_skipped:
+            logger.info("checkpoint policy skipped %d keys from file", len(policy_skipped))
 
     return out
 
@@ -771,15 +987,22 @@ def load_checkpoint(
     restore_rng: bool = False,
     stable_trunk_channel_inflate: bool = False,
     foundation_channel_inflate: bool = False,
+    load_prefixes: Optional[Sequence[str]] = None,
+    skip_prefixes: Optional[Sequence[str]] = None,
+    adapt_report: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     ckpt = torch_load(path, map_location=map_location)
     state_dict = ckpt.get("model", ckpt)
+    rep: Dict[str, Any] = adapt_report if adapt_report is not None else {}
     try:
         state_dict = adapt_checkpoint_state_dict(
             model,
             state_dict,
             stable_trunk_channel_inflate=stable_trunk_channel_inflate,
             foundation_channel_inflate=foundation_channel_inflate,
+            load_prefixes=load_prefixes,
+            skip_prefixes=skip_prefixes,
+            adapt_report=rep,
         )
     except RuntimeError as exc:
         raise RuntimeError(
@@ -796,6 +1019,7 @@ def load_checkpoint(
         "missing_keys": list(missing),
         "unexpected_keys": list(unexpected),
         "extra": ckpt.get("extra", {}),
+        "adapt": dict(rep),
     }
 
 

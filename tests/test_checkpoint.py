@@ -237,6 +237,56 @@ class CheckpointTest(unittest.TestCase):
         self.assertEqual(tuple(w.shape), (32, 18))
         self.assertTrue(torch.allclose(w[:, 0], ck["value_proj.weight"][:, 0].to(w.dtype)))
 
+    def test_zed_router_feat_adapter_route_dim_migration(self):
+        from basicstfm.models.dpm_stfm_zed import _EventAdapter
+
+        class M(torch.nn.Module):
+            def __init__(self, feat_dim: int) -> None:
+                super().__init__()
+                self.hidden_dim = 128
+                self.zed_router_feat_adapter = _EventAdapter(feat_dim, bottleneck=32)
+
+        pre = M(138)
+        post = M(172)
+        ck = {
+            k: v
+            for k, v in pre.state_dict().items()
+            if k.startswith("zed_router_feat_adapter.")
+        }
+        report: dict = {}
+        out = adapt_checkpoint_state_dict(post, ck, adapt_report=report)
+        w0 = out["zed_router_feat_adapter.net.0.weight"]
+        self.assertEqual(tuple(w0.shape), (32, 172))
+        self.assertIn("zed_router_feat_adapter.net.0.weight", report["migrated_route_feature_keys"])
+        w2 = out["zed_router_feat_adapter.net.2.weight"]
+        self.assertEqual(tuple(w2.shape), (172, 32))
+        tail_init = post.state_dict()["zed_router_feat_adapter.net.2.weight"][138:].clone()
+        torch.testing.assert_close(w2[138:], tail_init)
+
+    def test_stable_trunk_stage_skip_prefixes_drop_zed_weights(self):
+        from basicstfm.models.dpm_stfm_zed import _EventAdapter, _RouterFusionGate, _SoftmaxRouterMLP
+
+        class Z(torch.nn.Module):
+            def __init__(self) -> None:
+                super().__init__()
+                self.hidden_dim = 128
+                self.zed_router = _SoftmaxRouterMLP(172, num_experts=4, hidden=32)
+                self.zed_route_gate = _RouterFusionGate(172)
+                self.zed_router_feat_adapter = _EventAdapter(172, bottleneck=16)
+
+        m = Z()
+        full = dict(m.state_dict())
+        report: dict = {}
+        out = adapt_checkpoint_state_dict(
+            m,
+            full,
+            skip_prefixes=["zed_router.*", "zed_route_gate.*", "zed_router_feat_adapter.*"],
+            adapt_report=report,
+        )
+        for k, v in out.items():
+            if k.startswith(("zed_router.", "zed_route_gate.", "zed_router_feat_adapter.")):
+                torch.testing.assert_close(v, m.state_dict()[k])
+
     def test_restore_rng_state_accepts_python_lists(self):
         state = {"torch": torch.get_rng_state().tolist()}
         restore_rng_state(state)
